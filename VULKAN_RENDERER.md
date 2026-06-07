@@ -60,14 +60,41 @@ into renderervk from the gl2 renderer:
 - Swapchain recreate on `VK_SUBOPTIMAL`/`OUT_OF_DATE`; on `SURFACE_LOST` the recreate
   is deferred until resume (the `ANativeWindow` is gone while backgrounded).
 - Quake3e's transient/lazily-allocated depth attachments and `DONT_CARE` store ops are
-  kept — they save real bandwidth on tilers.
+  kept — they save real bandwidth on tilers — except where an attachment is actually
+  stored: with bloom on, the multisampled color attachment gets `storeOp=STORE`, so it
+  is allocated as a regular device-local image (storing into lazily-allocated memory is
+  contradictory, and Adreno corrupts it).
+
+## Correctness fixes found on device (vs upstream Quake3e)
+
+- **Render-pass compatibility for post-bloom pipelines**: upstream creates every
+  pipeline's `POST_BLOOM` handle against the MSAA main render pass, then binds it
+  inside the single-sample post-bloom pass. That sample-count mismatch is a spec
+  violation Mali forgives — Adreno (530 and 740 verified) renders all post-bloom 2D
+  as banded garbage and can eventually hang the GPU (`VK_ERROR_DEVICE_LOST`).
+  `create_pipeline` now builds `POST_BLOOM` handles against the post-bloom render
+  pass at 1 sample.
+- **Framebuffer-global external dependencies**: the main pass's external deps guard
+  attachment→sampled-read transitions (gamma/bloom sample the offscreen image), so
+  `VK_DEPENDENCY_BY_REGION_BIT` was removed — sampled reads aren't framebuffer-local.
+- **Draw-based clears on old Adreno**: Qualcomm proprietary drivers below 512.762.12
+  race `vkCmdClearAttachments` against draw calls (Google issue 166809097, the same
+  workaround ANGLE ships). On those drivers the mid-pass depth/color clears are drawn
+  as fullscreen quads instead.
+
+## Pipeline prewarm
+
+Implemented (see `PIPELINE_PREWARM.md` for the full design): after cgame finishes
+registering media (`RE_EndRegistration`, loading screen still up),
+`vk_prewarm_pipelines()` compiles every registered-but-uncompiled pipeline for the
+render passes in use, so no `vkCreateGraphicsPipelines` ever runs mid-frame. The EF
+`RF_FORCE_ENT_ALPHA` blended variants are pre-derived at shader registration so the
+sweep covers them. Measured: ~440 pipelines in ~130 ms (Adreno 740) / ~370 ms
+(Adreno 530), behind the load screen. The sweep also reruns after swapchain restarts.
+Still optional: a disk-serialized `VkPipelineCache` to cut load times further.
 
 ## Still open
 
-- **Pipeline prewarm**: mirror/portal and secondary-pass pipelines are still created
-  lazily; a post-load loop over `vk_gen_pipeline` for all registered pipelines (plus an
-  optional disk-serialized `VkPipelineCache`) will remove the remaining first-use
-  hitches.
 - **Beam rendering**: some `RT_ELECTRICITY`/`RT_LINE` effects (arc-welder beam) don't
   draw yet; under investigation.
 - **Render thread**: id Tech 3's frontend/backend split maps cleanly onto a worker

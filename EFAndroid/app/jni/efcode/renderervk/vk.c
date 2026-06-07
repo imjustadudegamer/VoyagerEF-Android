@@ -3074,6 +3074,27 @@ static void vk_alloc_persistent_pipelines( void )
 		vk.shadow_finish_pipeline = vk_find_pipeline_ext( 0, &def, r_shadows->integer ? qtrue: qfalse );
 	}
 
+	// draw-based clears: Qualcomm proprietary drivers < 512.762.12 race
+	// vkCmdClearAttachments against draw calls (Google issue 166809097;
+	// ANGLE's preferDrawClearOverVkCmdClearAttachments). Replace the mid-pass
+	// clears with fullscreen quads on those drivers.
+	{
+		Com_Memset( &def, 0, sizeof( def ) );
+		def.face_culling = CT_TWO_SIDED;
+		def.shader_type = TYPE_SIGNLE_TEXTURE;
+		def.primitives = TRIANGLE_STRIP;
+		def.state_bits = GLS_DEPTHMASK_TRUE;
+		def.depth_clear = 1;	// depth ALWAYS+write, color writes off
+		vk.clear_depth_pipeline = vk_find_pipeline_ext( 0, &def, vk.qcomClearBug ? qtrue : qfalse );
+
+		Com_Memset( &def, 0, sizeof( def ) );
+		def.face_culling = CT_TWO_SIDED;
+		def.shader_type = TYPE_SIGNLE_TEXTURE;
+		def.primitives = TRIANGLE_STRIP;
+		def.state_bits = GLS_DEPTHTEST_DISABLE;	// color from vertex RGBA0 x whiteImage
+		vk.clear_color_pipeline = vk_find_pipeline_ext( 0, &def, vk.qcomClearBug ? qtrue : qfalse );
+	}
+
 	// fog and dlights
 	{
 		unsigned int fog_state_bits[2] = {
@@ -3578,8 +3599,15 @@ static void vk_create_attachments( void )
 		create_depth_attachment( vk.screenMapWidth, vk.screenMapHeight, vk.screenMapSamples, &vk.screenMap.depth_image, &vk.screenMap.depth_image_view, qtrue );
 
 		if ( vk.msaaActive ) {
+			// With bloom on, the main render pass STOREs the multisampled
+			// attachment — storing into TRANSIENT/LAZILY_ALLOCATED memory is
+			// contradictory and produces banded corruption on Adreno (Mali
+			// silently backs the allocation). Same rule the depth attachment
+			// below already follows: an attachment that will be stored must
+			// not be transient.
 			create_color_attachment( glConfig.vidWidth, glConfig.vidHeight, vkSamples, vk.color_format,
-				VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, &vk.msaa_image, &vk.msaa_image_view, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, qtrue );
+				VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, &vk.msaa_image, &vk.msaa_image_view, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+				r_bloom->integer ? qfalse : qtrue );
 		}
 
 		if ( r_ext_supersample->integer ) {
@@ -3960,6 +3988,11 @@ static void vk_restart_swapchain( const char *funcname, VkResult res )
 	vk_update_attachment_descriptors();
 
 	vk_update_post_process_pipelines();
+
+	// all pipeline handles were destroyed above (defs survive); recreate them
+	// now against the warm in-memory pipeline cache instead of hitching on
+	// lazy regeneration over the next few seconds of gameplay
+	vk_prewarm_pipelines();
 }
 
 
@@ -4051,20 +4084,29 @@ void vk_initialize( void )
 	vkMaxSamples = MIN( props.limits.sampledImageColorSampleCounts, props.limits.sampledImageDepthSampleCounts );
 
 #ifdef __ANDROID__
-	// Adreno 5xx proprietary drivers corrupt multisample subpass resolves:
-	// with MSAA on, the resolved color image comes out as horizontal bands of
-	// stale tile data (verified on Adreno 530, driver 512.384, by bisecting
-	// r_fbo/r_ext_multisample/r_bloom on device — FBO and bloom are clean,
-	// MSAA alone reproduces it). The 5xx blob never got a fixed release;
-	// other engines gate the same hardware range (PPSSPP: deviceID
-	// 0x05000000..0x05FFFFFF). Force single-sample there; FBO, bloom and
-	// gamma keep working.
-	if ( props.vendorID == 0x5143 && props.deviceID >= 0x05000000 && props.deviceID < 0x06000000 ) {
-		if ( vk.msaaActive ) {
-			ri.Printf( PRINT_WARNING, "MSAA disabled: Adreno 5xx drivers corrupt multisample resolves\n" );
-			vk.msaaActive = qfalse;
+	// NOTE: an Adreno 5xx "corrupt MSAA resolves" gate used to live here
+	// (MSAA banding on Adreno 530 + 740, plus DEVICE_LOST on 740). The real
+	// root cause was ours, not the driver's: POST_BLOOM pipeline handles were
+	// created against the MSAA main render pass but bound inside the
+	// single-sample post-bloom pass — a render-pass compatibility violation
+	// Mali tolerates and Adreno does not. Fixed in create_pipeline(); the
+	// gate was removed after the fix verified clean on both Adreno devices.
+
+	// Qualcomm proprietary drivers below 512.762.12 race vkCmdClearAttachments
+	// against draw calls (Google issue 166809097; ANGLE works around it with
+	// preferDrawClearOverVkCmdClearAttachments). All modern Adreno blobs are
+	// branch 512.x.y packed with VK_MAKE_VERSION, so a raw uint32 compare is
+	// correct (Godot/PPSSPP precedent). Old-scheme deviceIDs (< 0x06000000)
+	// run EOL drivers that will never reach the fix. The open-source Turnip
+	// driver is not affected.
+	vk.qcomClearBug = qfalse;
+	if ( props.vendorID == 0x5143 && !Q_stristr( props.deviceName, "Turnip" ) ) {
+		const uint32_t qcom_fixed = ( 512u << 22 ) | ( 762u << 12 ) | 12u; // 512.762.12
+		if ( props.deviceID < 0x06000000 || props.driverVersion < qcom_fixed ) {
+			vk.qcomClearBug = qtrue;
+			ri.Printf( PRINT_WARNING, "Using draw-based clears: this driver (512.%u.%u) races vkCmdClearAttachments with draws\n",
+				( props.driverVersion >> 12 ) & 0x3FF, props.driverVersion & 0xFFF );
 		}
-		vkMaxSamples = VK_SAMPLE_COUNT_1_BIT;	// also caps the screenmap render target below
 	}
 #endif
 
@@ -6463,7 +6505,17 @@ VkPipeline create_pipeline( const Vk_Pipeline_Def *def, renderPass_t renderPassI
 	multisample_state.pNext = NULL;
 	multisample_state.flags = 0;
 
-	multisample_state.rasterizationSamples = (renderPassIndex == RENDER_PASS_SCREENMAP) ? vk.screenMapSamples : vkSamples;
+	// POST_BLOOM pipelines render inside the single-sample post-bloom pass —
+	// building them with the main pass's MSAA sample count (as upstream does)
+	// is a render-pass compatibility violation that Mali forgives but Adreno
+	// renders as banded garbage (every 2D/UI draw lands in this pass when
+	// bloom is active).
+	if ( renderPassIndex == RENDER_PASS_SCREENMAP )
+		multisample_state.rasterizationSamples = vk.screenMapSamples;
+	else if ( renderPassIndex == RENDER_PASS_POST_BLOOM )
+		multisample_state.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+	else
+		multisample_state.rasterizationSamples = vkSamples;
 
 	multisample_state.sampleShadingEnable = VK_FALSE;
 	multisample_state.minSampleShading = 1.0f;
@@ -6483,6 +6535,12 @@ VkPipeline create_pipeline( const Vk_Pipeline_Def *def, renderPass_t renderPassI
 #else
 	depth_stencil_state.depthCompareOp = (state_bits & GLS_DEPTHFUNC_EQUAL) ? VK_COMPARE_OP_EQUAL : VK_COMPARE_OP_LESS_OR_EQUAL;
 #endif
+	if ( def->depth_clear ) {
+		// fullscreen depth-clear quad: unconditionally overwrite depth
+		depth_stencil_state.depthTestEnable = VK_TRUE;
+		depth_stencil_state.depthWriteEnable = VK_TRUE;
+		depth_stencil_state.depthCompareOp = VK_COMPARE_OP_ALWAYS;
+	}
 	depth_stencil_state.depthBoundsTestEnable = VK_FALSE;
 	depth_stencil_state.stencilTestEnable = (def->shadow_phase != SHADOW_DISABLED) ? VK_TRUE : VK_FALSE;
 
@@ -6515,7 +6573,7 @@ VkPipeline create_pipeline( const Vk_Pipeline_Def *def, renderPass_t renderPassI
 	Com_Memset(&attachment_blend_state, 0, sizeof(attachment_blend_state));
 	attachment_blend_state.blendEnable = (state_bits & (GLS_SRCBLEND_BITS | GLS_DSTBLEND_BITS)) ? VK_TRUE : VK_FALSE;
 
-	if (def->shadow_phase == SHADOW_EDGES || def->shader_type == TYPE_SIGNLE_TEXTURE_DF)
+	if (def->shadow_phase == SHADOW_EDGES || def->shader_type == TYPE_SIGNLE_TEXTURE_DF || def->depth_clear)
 		attachment_blend_state.colorWriteMask = 0;
 	else
 		attachment_blend_state.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
@@ -6638,6 +6696,8 @@ VkPipeline create_pipeline( const Vk_Pipeline_Def *def, renderPass_t renderPassI
 
 	if ( renderPassIndex == RENDER_PASS_SCREENMAP )
 		create_info.renderPass = vk.render_pass.screenmap;
+	else if ( renderPassIndex == RENDER_PASS_POST_BLOOM && vk.render_pass.post_bloom != VK_NULL_HANDLE )
+		create_info.renderPass = vk.render_pass.post_bloom;	// single-sample, color-only — must match the pass these pipelines bind in
 	else
 		create_info.renderPass = vk.render_pass.main;
 
@@ -6683,6 +6743,54 @@ VkPipeline vk_gen_pipeline( uint32_t index ) {
 	} else {
 		ri.Error( ERR_FATAL, "%s(%i): NULL pipeline", __func__, index );
 		return VK_NULL_HANDLE;
+	}
+}
+
+
+/*
+=============
+vk_prewarm_pipelines
+
+Create every registered-but-uncompiled VkPipeline now, instead of lazily at
+first draw. A cold vkCreateGraphicsPipelines on a mobile driver can cost tens
+of milliseconds — two dropped frames the first time a mirror, fog volume,
+dynamic light or EF fade effect appears mid-game. Called from
+RE_EndRegistration (loading screen still up, all media registered) and after
+swapchain restarts (where all handles are destroyed but defs survive).
+
+RENDER_PASS_SCREENMAP is intentionally skipped: only extended-shader
+'screenMap' stages ever enter that pass and stock EF content has none; any
+def reached there still creates lazily as before. POST_BLOOM handles are
+prewarmed only when bloom is active, since that's when HUD/2D stages bind
+inside the post-bloom pass.
+=============
+*/
+void vk_prewarm_pipelines( void )
+{
+	renderPass_t passes[2];
+	uint32_t num_passes, p, i, count;
+	int start_ms;
+
+	passes[0] = RENDER_PASS_MAIN;
+	num_passes = 1;
+	if ( vk.fboActive && r_bloom->integer ) {
+		passes[num_passes++] = RENDER_PASS_POST_BLOOM;
+	}
+
+	count = 0;
+	start_ms = ri.Milliseconds();
+	for ( p = 0; p < num_passes; p++ ) {
+		for ( i = 0; i < vk.pipelines_count; i++ ) {
+			VK_Pipeline_t *pipeline = vk.pipelines + i;
+			if ( pipeline->handle[ passes[p] ] == VK_NULL_HANDLE ) {
+				pipeline->handle[ passes[p] ] = create_pipeline( &pipeline->def, passes[p], i );
+				count++;
+			}
+		}
+	}
+	if ( count ) {
+		ri.Printf( PRINT_ALL, "Prewarmed %u pipelines (%u defs) in %i msec\n",
+			count, vk.pipelines_count, ri.Milliseconds() - start_ms );
 	}
 }
 
@@ -6843,6 +6951,56 @@ static void get_mvp_transform( float *mvp )
 }
 
 
+/*
+=============
+vk_clear_with_quad
+
+Draw-based clear for Qualcomm proprietary drivers where vkCmdClearAttachments
+races with draw calls (vk.qcomClearBug). Draws a fullscreen TRIANGLE_STRIP
+quad in clip space (identity MVP); the current scissor bounds the cleared
+region, matching VkClearRect semantics. The depth variant writes
+depth = far with VK_COMPARE_OP_ALWAYS and color writes off; the color variant
+writes the vertex color with depth test disabled. Mirrors RB_ShadowFinish's
+fullscreen-quad pattern (tess scratch + explicit MVP, both reset afterwards).
+=============
+*/
+static void vk_clear_with_quad( const byte rgba[4], qboolean depth ) {
+	static const float ident[16] = { 1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1 };
+#ifdef USE_REVERSED_DEPTH
+	const float z = depth ? 0.0f : 0.0f;
+#else
+	const float z = depth ? 1.0f : 0.0f;
+#endif
+	int i;
+
+	tess.xyz[0][0] = -1.0f; tess.xyz[0][1] = -1.0f; tess.xyz[0][2] = z;
+	tess.xyz[1][0] =  1.0f; tess.xyz[1][1] = -1.0f; tess.xyz[1][2] = z;
+	tess.xyz[2][0] = -1.0f; tess.xyz[2][1] =  1.0f; tess.xyz[2][2] = z;
+	tess.xyz[3][0] =  1.0f; tess.xyz[3][1] =  1.0f; tess.xyz[3][2] = z;
+
+	for ( i = 0; i < 4; i++ ) {
+		tess.svars.colors[0][i].rgba[0] = rgba[0];
+		tess.svars.colors[0][i].rgba[1] = rgba[1];
+		tess.svars.colors[0][i].rgba[2] = rgba[2];
+		tess.svars.colors[0][i].rgba[3] = rgba[3];
+	}
+
+	tess.numVertexes = 4;
+
+	GL_Bind( tr.whiteImage );
+
+	vk_bind_pipeline( depth ? vk.clear_depth_pipeline : vk.clear_color_pipeline );
+	vk_update_mvp( ident );
+	vk_bind_geometry( TESS_XYZ | TESS_RGBA0 );
+	vk_draw_geometry( DEPTH_RANGE_NORMAL, qfalse );
+
+	tess.numVertexes = 0;
+
+	// restore push constants for whatever view state is current
+	vk_update_mvp( NULL );
+}
+
+
 void vk_clear_color( const vec4_t color ) {
 
 	VkClearAttachment attachment;
@@ -6850,6 +7008,16 @@ void vk_clear_color( const vec4_t color ) {
 
 	if ( !vk.active )
 		return;
+
+	if ( vk.qcomClearBug ) {
+		byte rgba[4];
+		rgba[0] = (byte)( color[0] * 255.0f );
+		rgba[1] = (byte)( color[1] * 255.0f );
+		rgba[2] = (byte)( color[2] * 255.0f );
+		rgba[3] = (byte)( color[3] * 255.0f );
+		vk_clear_with_quad( rgba, qfalse );
+		return;
+	}
 
 	attachment.colorAttachment = 0;
 	attachment.clearValue.color.float32[0] = color[0];
@@ -6876,6 +7044,14 @@ void vk_clear_depth( qboolean clear_stencil ) {
 
 	if ( vk_world.dirty_depth_attachment == 0 )
 		return;
+
+	// The draw-based quad cannot clear stencil; stencil shadows (r_shadows 2)
+	// keep the vkCmdClearAttachments path even on affected drivers.
+	if ( vk.qcomClearBug && !( clear_stencil && glConfig.stencilBits > 0 ) ) {
+		static const byte black[4] = { 0, 0, 0, 255 };
+		vk_clear_with_quad( black, qtrue );
+		return;
+	}
 
 	attachment.colorAttachment = 0;
 #ifdef USE_REVERSED_DEPTH

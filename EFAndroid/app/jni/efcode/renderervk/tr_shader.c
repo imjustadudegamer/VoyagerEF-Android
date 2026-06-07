@@ -3633,6 +3633,38 @@ static shader_t *FinishShader( void ) {
 				shader.fogCollapse = qtrue;
 			}
 #endif
+
+#ifdef ELITEFORCE
+			// RF_FORCE_ENT_ALPHA first half (draw-time half in tr_shade.c
+			// RB_IterateStagesGeneric): EF fade effects (transporter, cloak,
+			// corpse fade, forcefields) swap opaque stages to a blended
+			// pipeline variant at draw time. Pre-derive those defs here, with
+			// the exact same state_bits transform, so they exist in
+			// vk.pipelines[] before vk_prewarm_pipelines() sweeps it —
+			// otherwise the first such effect on screen would compile a
+			// pipeline mid-frame. The draw-time vk_find_pipeline_ext dedupes
+			// by def, so it finds these (already compiled) entries.
+			if ( !( pStage->stateBits & ( GLS_ATEST_BITS | GLS_SRCBLEND_BITS | GLS_DSTBLEND_BITS ) ) ) {
+				uint32_t fade_base[4];
+				int n_fade = 0, fade_i;
+
+				fade_base[n_fade++] = pStage->vk_pipeline[0];
+				fade_base[n_fade++] = pStage->vk_mirror_pipeline[0];
+#ifdef USE_FOG_COLLAPSE
+				if ( fogCollapse && tr.numFogs > 0 ) {
+					fade_base[n_fade++] = pStage->vk_pipeline[1];
+					fade_base[n_fade++] = pStage->vk_mirror_pipeline[1];
+				}
+#endif
+				for ( fade_i = 0; fade_i < n_fade; fade_i++ ) {
+					Vk_Pipeline_Def fade_def;
+					vk_get_pipeline_def( fade_base[fade_i], &fade_def );
+					fade_def.state_bits = ( fade_def.state_bits & ~( GLS_SRCBLEND_BITS | GLS_DSTBLEND_BITS | GLS_DEPTHMASK_TRUE ) )
+						| GLS_SRCBLEND_SRC_ALPHA | GLS_DSTBLEND_ONE_MINUS_SRC_ALPHA;
+					vk_find_pipeline_ext( 0, &fade_def, qfalse );
+				}
+			}
+#endif // ELITEFORCE
 		}
 	}
 #endif // USE_VULKAN

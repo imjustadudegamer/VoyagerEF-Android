@@ -2019,6 +2019,13 @@ static void RE_EndRegistration( void ) {
 	vk_wait_idle();
 	// command buffer is not in recording state at this stage
 	// so we can't issue RB_ShowImages() there
+
+	// Pipeline prewarm (the first-use stutter fix): cgame has finished
+	// registering all media and the loading screen is still up — compile
+	// every pipeline the map can need right now, so no mid-game
+	// vkCreateGraphicsPipelines hitch remains. vkCreateGraphicsPipelines
+	// needs no command buffer, so this is safe here.
+	vk_prewarm_pipelines();
 #else
 	R_IssuePendingRenderCommands();
 	if ( !ri.Sys_LowPhysicalMemory() ) {

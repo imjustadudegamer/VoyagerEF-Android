@@ -184,6 +184,7 @@ typedef struct {
 	int abs_light;
 	int allow_discard;
 	int acff; // none, rgb, rgba, alpha
+	int depth_clear; // fullscreen depth-clear quad: depth test ALWAYS + write, color writes off
 	struct {
 		byte rgb;
 		byte alpha;
@@ -262,6 +263,7 @@ void vk_destroy_samplers( void );
 
 uint32_t vk_find_pipeline_ext( uint32_t base, const Vk_Pipeline_Def *def, qboolean use );
 void vk_get_pipeline_def( uint32_t pipeline, Vk_Pipeline_Def *def );
+void vk_prewarm_pipelines( void );
 
 void vk_create_post_process_pipeline( int program_index, uint32_t width, uint32_t height );
 void vk_create_pipelines( void );
@@ -531,6 +533,11 @@ typedef struct {
 	// dim 1: 0 - normal view, 1 - mirror view
 	uint32_t shadow_volume_pipelines[2][2];
 	uint32_t shadow_finish_pipeline;
+
+	// draw-based clears (Qualcomm vkCmdClearAttachments race workaround)
+	uint32_t clear_depth_pipeline;
+	uint32_t clear_color_pipeline;
+	qboolean qcomClearBug; // Qualcomm proprietary < 512.762.12: vkCmdClearAttachments races with draws
 
 	// dim 0 is based on fogPass_t: 0 - corresponds to FP_EQUAL, 1 - corresponds to FP_LE.
 	// dim 1 is directly a cullType_t enum value.
