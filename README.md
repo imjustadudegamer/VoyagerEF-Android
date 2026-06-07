@@ -90,8 +90,9 @@ under `baseEF/` are only reliable before a map loads.
 - If you see corrupted graphics (banding/garbage across the screen), try turning MSAA
   off (Video options, or `r_ext_multisample 0` followed by `vid_restart`) and please
   report your device + GPU driver version.
-- Some effects are missing — e.g. beam effects like the arc-welder weapon beam do not
-  render yet.
+- Environment-mapped ("chrome") surfaces use the Quake 3 texture-coordinate formula
+  rather than Elite Force's, so reflective trim pans slightly differently than on the
+  desktop game.
 - The on-screen touch controls are functional but rough; the layout and feel need a
   revamp.
 - Ogg/Opus/MP3 decoding and curl downloads are not compiled in yet. This doesn't

@@ -1,89 +1,87 @@
-# Bloom white-screen bug — investigation notes
+# Postmortem: boot-dependent white fog ("white void")
 
-OPEN BUG (2026-06-07). Boot-dependent solid-white rendering of the 3D view with
-`r_bloom 1`, observed on a Mali-G78 device. HUD/2D and the first-person weapon
-render correctly on top; the world area is pure 255-white. Manifests visibly on
-"empty" views — loading screens, spawn intro, death/scoreboard, looking into the
-void on foggy maps (hm_borg1 "Assimilation", hm_dn2) — but on a bad boot the whole
-session is affected; on a good boot the session is clean. Roughly every other boot.
+Symptom: on a fraction of app launches, fogged areas rendered saturated white
+instead of the map's fog color — most visibly on foggy maps (hm_borg1, hm_dn2)
+as a white mass where the black-fogged "void" should be, as a whole-screen
+white wash when loading into a map, and behind death/scoreboard views. With
+bloom enabled the bloom chain spread the white across the entire frame. A bad
+launch stayed bad for the whole session; the next launch could be fine.
 
-`r_bloom 0` (Video options) avoids it; that is the user-facing workaround.
+## Root cause
 
-## Established facts (each verified, in order)
+`vk_compat.c` defines `float Q_atof( const char *str )` for the Quake3e-derived
+Vulkan renderer, but no header declared it. Under C's implicit-declaration rule
+every call site in renderervk compiled against an assumed `int Q_atof()`:
 
-1. Whole-world white behind correctly-drawn weapon + HUD (screenshots, pixel
-   sample = exactly 255,255,255). Normal gameplay frames in corridors are fine
-   on the same boot.
-2. NOT the fog being bright: hm_borg1's fog is `textures/borg/fog_black`,
-   fogparms ( 0 0 0 ).
-3. Frame anatomy (backend instrumentation): on scoreboard/death frames the world
-   scene draws, `vk_bloom()` runs at the 3D->2D transition leaving the post-bloom
-   pass open, then cgame draws FOUR more 3D scenes (RDF_NOWORLDMODEL — the 3D
-   player-head icons) inside the post-bloom pass.
-4. Two real validity bugs found there and FIXED (kept, they were genuine UB):
-   - POST_BLOOM pipeline variants had depth/stencil enabled while the post-bloom
-     pass has no depth attachment (vk.c create_pipeline now forces them off).
-   - vk_clear_depth() could record a depth-aspect vkCmdClearAttachments inside
-     the depthless post-bloom pass (now guarded).
-   White persisted after both.
-5. All non-transient color attachments are now cleared at creation
-   (vk_alloc_attachments init-clear; also kept — correct hygiene). White persisted.
-6. Khronos validation layer (1.4.350, packed into a debuggable APK,
-   HWUI forced to skiagl to avoid a layer/HWUI abort): core validation CLEAN
-   during white frames. Only init-time noise plus 20x wireframe pipelines created
-   without fillModeNonSolid (r_showtris debug pipelines — minor, fix someday).
-7. Synchronization validation (enables=VK_VALIDATION_FEATURE_ENABLE_
-   SYNCHRONIZATION_VALIDATION_EXT, confirmed acknowledged by the layer):
-   ZERO SYNC-HAZARD through load -> bot match -> death. API-valid AND sync-clean.
-8. Attachment tint test: init-clear colored per class (color image RED, bloom
-   extract GREEN, blur chain BLUE, screenmap MAGENTA, other YELLOW) — the bad
-   area was STILL WHITE, not any tint. => The white does NOT come from sampling
-   never-written attachment memory.
+- the definition returns its result in the float register (`s0`),
+- callers read the integer register (`w0`), i.e. unrelated leftover data.
 
-## Surviving hypotheses (untested)
+Every numeric token the renderer parses from shader scripts goes through
+`Q_atof` — `fogParms`, wave amplitudes, `tcMod` rates, `deformVertexes`
+parameters. All of them received register garbage that varied from launch to
+launch but was stable within one session (the values are parsed once at load).
 
-- Host-side uninitialized memory feeding the bloom path deterministically per
-  boot: spec constants / push constants / uniform staging for the extract,
-  blur, or blend pipelines (NaN or huge float -> white output on Mali).
-  Audit `vk_create_post_process_pipeline`, `vk_create_blur_pipeline`,
-  `vk_bloom()` descriptor/uniform inputs, and anything `r_bloom_*`-derived
-  computed before cvar init or after vid_restart re-creation.
-- Mali driver bug in the bloom pass sequence (extract -> 6x blur -> additive
-  blend) — e.g. mishandled storeOp/loadOp chain on r8g8b8a8 (vk.bloom_format)
-  at odd mip sizes. Compare 1920x1080 vs 2400x1080 devices.
-- NaN propagation: if any blur weight/texel is NaN, additive blend clamps to
-  white on some GPUs. The earlier "threshold 1.0 + intensity 0 made it go away"
-  observation supports a multiplied-garbage theory but was taken on a single
-  boot and may have been boot-luck — re-test across multiple boots.
+For `textures/borg/fog_black` (`fogparms ( 0 0 0 ) 256`), the parsed fog color
+came back around 8.4e6 instead of 0. The collapsed-fog fragment path
+`mix( base, fog * fogColor, fog.a )` then saturated toward white with distance.
+Launches where the garbage happened to be small or negative looked normal,
+which made the bug appear device- or driver-dependent. It is neither: the same
+miscompiled read happens on every ARM64/ARM32 build.
 
-## Recommended next steps (in order)
+The build silenced the one diagnostic that names this bug —
+`-Wno-implicit-function-declaration` in `app/jni/src/CMakeLists.txt`.
 
-1. RenderDoc capture of a white frame (RenderDoc is already installed on the
-   Windows side; app must be debuggable=true temporarily — see build.gradle
-   release block). Inspect the bloom extract output and blend inputs directly;
-   this ends the guessing.
-2. Host uninit audit of the bloom pipeline creation parameters (above).
-3. Multi-boot retest of r_bloom_threshold/intensity sensitivity.
-4. If a Mali workaround is needed and root cause stays elusive: skip vk_bloom()
-   when the current frame never wrote the color attachment, or gate bloom off
-   by default on the affected driver as a last resort (vk.qcomClearBug-style
-   gate, documented as such).
+## Fix
 
-## Debug tooling recipes proven this session
+- Declare `Q_atof`, `Com_GenerateHashValue`, `crc32_buffer` (vk_compat.c
+  exports) and `R_RandomOn` in `renderervk/tr_local.h`. The header already
+  declared the pointer-returning compat functions for exactly this reason;
+  the float-returning one had been missed.
+- Replace `-Wno-implicit-function-declaration` with
+  `-Werror=implicit-function-declaration` so this class of bug fails the build.
 
-- Validation layer on a release-signed build: set `debuggable true` (TEMP) in
-  app/build.gradle release block; copy libVkLayer_khronos_validation.so into
-  app/src/main/jniLibs/arm64-v8a/ (loader finds it in the APK); then
+## How it was isolated
+
+GPU-side theories (tile-GPU writeback elimination, `DONT_CARE` load ops,
+swapchain content reuse) all failed against the evidence. The steps that
+actually converged:
+
+1. The engine's own `screenshot` command reads the offscreen color image
+   *before* the gamma/present pass — white in those captures placed the fault
+   in rendered content, not the present chain.
+2. The captures showed world geometry visible through a distance-graded white
+   wash: fog blending toward white, not undefined memory.
+3. Logging the fog uniform at the write site showed the CPU itself feeding
+   ~8.4e6 per channel; logging up the chain (`fog_t::color` at map load, then
+   `fogParms` at shader parse) walked it back to `Q_atof`.
+4. The compiler confirmed it: with the print added, clang warned
+   "format specifies 'double' but the argument has type 'int'" for a
+   `Q_atof(...)` argument.
+
+While chasing the wrong theories the render-pass code still picked up real
+hardening (kept): swapchain/resolve-target load ops changed from `DONT_CARE`
+to `CLEAR`, `initSwapchainLayout = UNDEFINED` (removes pre-acquire layout
+transitions that violate WSI ownership), always passing all three clear values
+(the screenmap pass is multisampled regardless of `r_ext_multisample`),
+acquire `VK_TIMEOUT`/`VK_NOT_READY` handling, a swapchain image-count bounds
+check, wireframe-pipeline fallback when `fillModeNonSolid` is unsupported, and
+a `pVertexAttributeDescriptions` copy-paste fix in the post-process pipelines.
+
+## Debug tooling notes (Android, kept for future work)
+
+- Khronos validation layer on a device build: set `debuggable true` (temp) in
+  app/build.gradle, copy libVkLayer_khronos_validation.so into
+  app/src/main/jniLibs/<abi>/, then:
     adb shell settings put global enable_gpu_debug_layers 1
     adb shell settings put global gpu_debug_app com.voyager.ef
     adb shell settings put global gpu_debug_layers VK_LAYER_KHRONOS_validation
-    adb shell setprop debug.hwui.renderer skiagl   # or HWUI+layer aborts
+    adb shell setprop debug.hwui.renderer skiagl
   Sync validation: setprop debug.vulkan.khronos_validation.enables
   VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT
-  Revert ALL of this after use (settings delete global ..., remove jniLibs,
-  remove debuggable).
-- Backend frame-anatomy logging: ri.Printf markers in RB_DrawSurfs /
-  vk_bloom / vk_begin_main_render_pass; read with
-  adb logcat -d VoyagerEF:I '*:S'.
-- Attachment blame-by-tint: clear each attachment class to a distinct color in
-  vk_alloc_attachments' init-clear and look at what leaks on screen.
+  Revert all of it afterwards.
+- Boot-loop A/B harness: push a temporary autoexec.cfg (cvar overrides +
+  `devmap` + `screenshot`), cycle force-stop/start over adb, pull
+  baseEF/screenshots/ and compare pixel statistics per boot.
+- The engine screenshot path reads `vk.color_image` (pre-gamma) when r_fbo 1,
+  the swapchain image when r_fbo 0 — useful to bisect rendered-content bugs
+  from present-path bugs.

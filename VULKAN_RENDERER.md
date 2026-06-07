@@ -28,10 +28,9 @@ The seams, in order of effort:
 - **refexport**: Quake3e's `GetRefAPI` was rewritten to fill Elite Force's
   `refexport_t` — Quake3e-only entry points dropped, signatures adapted
   (`RE_Shutdown`, `RE_AddRefEntityToScene`), EF's `RegisterShader3D` added.
-- **refimport**: the engine grew the handful of imports renderervk calls
-  (`Sys_Microseconds`, JPEG writers, etc.); Quake3e's cvar-group API is stubbed since
-  the EF cvar system has no groups. `Cvar_CheckRange` differs in signature and goes
-  through a small wrapper.
+- **refimport**: the engine grew the handful of imports renderervk calls;
+  Quake3e's cvar-group API is stubbed since the EF cvar system has no groups.
+  `Cvar_CheckRange` differs in signature and goes through a small wrapper.
 - **Window/surface**: the renderer talks to SDL directly —
   `SDL_WINDOW_VULKAN`, `SDL_Vulkan_LoadLibrary(NULL)`,
   `SDL_Vulkan_GetVkGetInstanceProcAddr`, `SDL_Vulkan_CreateSurface`. No `-lvulkan`;

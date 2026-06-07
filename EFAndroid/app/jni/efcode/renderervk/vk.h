@@ -538,6 +538,7 @@ typedef struct {
 	uint32_t clear_depth_pipeline;
 	uint32_t clear_color_pipeline;
 	qboolean qcomClearBug; // Qualcomm proprietary < 512.762.12: vkCmdClearAttachments races with draws
+	qboolean fillModeNonSolid; // device supports wireframe (POLYGON_MODE_LINE); Mali typically doesn't
 
 	// dim 0 is based on fogPass_t: 0 - corresponds to FP_EQUAL, 1 - corresponds to FP_LE.
 	// dim 1 is directly a cullType_t enum value.

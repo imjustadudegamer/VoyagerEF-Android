@@ -661,7 +661,12 @@ static void vk_create_swapchain( VkPhysicalDevice physical_device, VkDevice devi
 	VK_CHECK( qvkCreateSwapchainKHR( device, &desc, NULL, swapchain ) );
 
 	VK_CHECK( qvkGetSwapchainImagesKHR( vk.device, vk.swapchain, &vk.swapchain_image_count, NULL ) );
-	vk.swapchain_image_count = MIN( vk.swapchain_image_count, MAX_SWAPCHAIN_IMAGES );
+	if ( vk.swapchain_image_count > MAX_SWAPCHAIN_IMAGES ) {
+		// vkAcquireNextImageKHR can return ANY image index the driver owns, so
+		// silently clamping would index past our per-image arrays — fail loudly
+		ri.Error( ERR_FATAL, "swapchain returned %i images, max supported is %i",
+			vk.swapchain_image_count, MAX_SWAPCHAIN_IMAGES );
+	}
 	VK_CHECK( qvkGetSwapchainImagesKHR( vk.device, vk.swapchain, &vk.swapchain_image_count, vk.swapchain_images ) );
 
 	for ( i = 0; i < vk.swapchain_image_count; i++ ) {
@@ -751,10 +756,11 @@ static void vk_create_render_passes( void )
 		attachments[0].samples = VK_SAMPLE_COUNT_1_BIT;
 
 #ifdef USE_BUFFER_CLEAR
-		if ( vk.msaaActive )
-			attachments[0].loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;	// Assuming this will be completely overwritten
-		else
-			attachments[ 0 ].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+		// CLEAR even when msaaActive: with MSAA the per-pixel content of this
+		// resolve target is otherwise defined only by the end-of-pass resolve
+		// write. A loadOp clear is free on tile GPUs; give every pixel a
+		// defined value rather than trusting the resolve to cover everything.
+		attachments[ 0 ].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
 #else
 		attachments[ 0 ].loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;	// Assuming this will be completely overwritten
 #endif
@@ -995,7 +1001,11 @@ static void vk_create_render_passes( void )
 	attachments[0].flags = 0;
 	attachments[0].format = vk.present_format.format;
 	attachments[0].samples = VK_SAMPLE_COUNT_1_BIT;
-	attachments[0].loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+	// CLEAR, not DONT_CARE: the swapchain image is a recycled gralloc buffer
+	// whose contents are never initialized anywhere else. The fullscreen gamma
+	// draw should overwrite every pixel, but a loadOp clear is free on tile
+	// GPUs and guarantees defined content even when it doesn't.
+	attachments[0].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
 	attachments[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE; // needed for presentation
 	attachments[0].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
 	attachments[0].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
@@ -1017,10 +1027,9 @@ static void vk_create_render_passes( void )
 	attachments[0].format = vk.color_format;
 	attachments[0].samples = VK_SAMPLE_COUNT_1_BIT;
 #ifdef USE_BUFFER_CLEAR
-	if ( vk.screenMapSamples > VK_SAMPLE_COUNT_1_BIT )
-		attachments[0].loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-	else
-		attachments[0].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+	// CLEAR unconditionally — same rationale as the main-pass resolve target:
+	// don't leave the resolve write as the only defined content source.
+	attachments[0].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
 #else
 	attachments[0].loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE; // Assuming this will be completely overwritten
 #endif
@@ -1829,6 +1838,7 @@ static qboolean vk_create_device( VkPhysicalDevice physical_device, int device_i
 
 		// fillModeNonSolid is wireframe (r_showtris) only; Mali/mobile GPUs often
 		// lack it. Don't reject the device — just disable wireframe debug.
+		vk.fillModeNonSolid = device_features.fillModeNonSolid ? qtrue : qfalse;
 		if ( device_features.fillModeNonSolid == VK_FALSE ) {
 			ri.Printf( PRINT_ALL, "...fillModeNonSolid not supported (wireframe debug disabled)\n" );
 		}
@@ -4503,8 +4513,12 @@ void vk_initialize( void )
 	vk.renderPassIndex = RENDER_PASS_MAIN; // default render pass
 
 	// swapchain
-	vk.initSwapchainLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-	//vk.initSwapchainLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+	// UNDEFINED (not PRESENT_SRC): render passes take each acquired image from
+	// UNDEFINED, so no pre-acquire layout transitions are needed. Recording
+	// layout transitions on swapchain images before vkAcquireNextImageKHR (the
+	// old PRESENT_SRC init loop) uses images the presentation engine still
+	// owns, which violates WSI ownership rules.
+	vk.initSwapchainLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 	vk_create_swapchain( vk.physical_device, vk.device, vk_surface, vk.present_format, &vk.swapchain, qtrue );
 
 	// color/depth attachments
@@ -5381,7 +5395,7 @@ void vk_create_post_process_pipeline( int program_index, uint32_t width, uint32_
 	vertex_input_state.vertexBindingDescriptionCount = 0;
 	vertex_input_state.pVertexBindingDescriptions = NULL;
 	vertex_input_state.vertexAttributeDescriptionCount = 0;
-	vertex_input_state.pVertexBindingDescriptions = NULL;
+	vertex_input_state.pVertexAttributeDescriptions = NULL;
 
 	// shaders
 	set_shader_stage_desc( shader_stages+0, VK_SHADER_STAGE_VERTEX_BIT, vk.modules.gamma_vs, "main" );
@@ -5614,7 +5628,7 @@ void vk_create_blur_pipeline( uint32_t index, uint32_t width, uint32_t height, q
 	vertex_input_state.vertexBindingDescriptionCount = 0;
 	vertex_input_state.pVertexBindingDescriptions = NULL;
 	vertex_input_state.vertexAttributeDescriptionCount = 0;
-	vertex_input_state.pVertexBindingDescriptions = NULL;
+	vertex_input_state.pVertexAttributeDescriptions = NULL;
 
 	// shaders
 	set_shader_stage_desc( shader_stages+0, VK_SHADER_STAGE_VERTEX_BIT, vk.modules.gamma_vs, "main" );
@@ -6498,7 +6512,10 @@ VkPipeline create_pipeline( const Vk_Pipeline_Def *def, renderPass_t renderPassI
 	if ( def->shader_type == TYPE_DOT ) {
 		rasterization_state.polygonMode = VK_POLYGON_MODE_POINT;
 	} else {
-		rasterization_state.polygonMode = (state_bits & GLS_POLYMODE_LINE) ? VK_POLYGON_MODE_LINE : VK_POLYGON_MODE_FILL;
+		// POLYGON_MODE_LINE requires the fillModeNonSolid device feature, which
+		// is optional on this device (wireframe is r_showtris debug only) —
+		// fall back to FILL instead of creating validation-invalid pipelines
+		rasterization_state.polygonMode = ( (state_bits & GLS_POLYMODE_LINE) && vk.fillModeNonSolid ) ? VK_POLYGON_MODE_LINE : VK_POLYGON_MODE_FILL;
 	}
 
 	switch ( def->face_culling ) {
@@ -7524,10 +7541,18 @@ static void vk_begin_render_pass( VkRenderPass renderPass, VkFramebuffer frameBu
 		// [1] - depth/stencil
 		// [2] - multisampled color, optional
 		Com_Memset( clear_values, 0, sizeof( clear_values ) );
+		// clear color alpha to 1.0 like the GL renderers do — shaders using
+		// destination-alpha blends should see opaque where nothing was drawn
+		clear_values[0].color.float32[3] = 1.0f;
+		clear_values[2].color.float32[3] = 1.0f;
 #ifndef USE_REVERSED_DEPTH
 		clear_values[1].depthStencil.depth = 1.0;
 #endif
-		render_pass_begin_info.clearValueCount = vk.msaaActive ? 3 : 2;
+		// always 3, not (msaaActive ? 3 : 2): the screenmap pass is ALWAYS
+		// multisampled regardless of r_ext_multisample, so its clear at index 2
+		// needs a defined value even when vk.msaaActive is false (VUID-00902).
+		// Extra entries beyond a pass's attachment count are ignored by spec.
+		render_pass_begin_info.clearValueCount = 3;
 		render_pass_begin_info.pClearValues = clear_values;
 
 		vk_world.dirty_depth_attachment = 0;
@@ -7706,6 +7731,10 @@ _retry:
 			} else {
 				ri.Error( ERR_FATAL, "vkAcquireNextImageKHR returned %s", vk_result_string( res ) );
 			}
+		} else if ( res == VK_TIMEOUT || res == VK_NOT_READY ) {
+			// positive non-success: no image was acquired and the semaphore will
+			// never signal — treating this as acquired would hang the queue submit
+			ri.Error( ERR_FATAL, "vkAcquireNextImageKHR returned %s", vk_result_string( res ) );
 		}
 		vk.cmd->swapchain_image_acquired = qtrue;
 	}
@@ -7847,7 +7876,9 @@ void vk_end_frame( void )
 			vk.renderScaleX = 1.0;
 			vk.renderScaleY = 1.0;
 
-			vk_begin_render_pass( vk.render_pass.gamma, vk.framebuffers.gamma[ vk.cmd->swapchain_image_index ], qfalse, vk.renderWidth, vk.renderHeight );
+			// qtrue: the gamma pass now clears the swapchain attachment (loadOp
+			// CLEAR — see vk_create_render_passes) so it needs clear values
+			vk_begin_render_pass( vk.render_pass.gamma, vk.framebuffers.gamma[ vk.cmd->swapchain_image_index ], qtrue, vk.renderWidth, vk.renderHeight );
 			qvkCmdBindPipeline( vk.cmd->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vk.gamma_pipeline );
 			qvkCmdBindDescriptorSets( vk.cmd->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vk.pipeline_layout_post_process, 0, 1, &vk.color_descriptor, 0, NULL );
 
