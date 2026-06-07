@@ -7,7 +7,7 @@ build-time fallback (`-DEF_RENDERER=gl2`).
 
 ## Why not GL ES
 
-Profiling the GL build on Mali (tile-based deferred) showed panning stutter caused by
+Profiling the GL build on a tile-based mobile GPU showed panning stutter caused by
 the driver re-validating and recompiling pipeline state mid-draw as new surface/shader
 combinations stream into view. It was not fill-rate (half resolution didn't help), not
 the VM (JIT'd), not first-use shader compile (prewarming didn't help), and not thermal.
