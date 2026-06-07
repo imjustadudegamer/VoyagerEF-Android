@@ -1,4 +1,4 @@
-# Voyager EF — Star Trek: Voyager — Elite Force for Android
+# Voyager Elite Force for Android
 
 A native Android port of *Star Trek: Voyager — Elite Force* **Holomatch** (the
 multiplayer game, 2000) built on
