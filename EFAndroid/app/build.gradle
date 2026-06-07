@@ -1,0 +1,66 @@
+apply plugin: 'com.android.application'
+
+android {
+    namespace "org.libsdl.app"
+    compileSdk 35
+    ndkVersion "25.1.8937393"
+
+    defaultConfig {
+        applicationId "com.voyager.ef"
+        minSdkVersion 24
+        targetSdkVersion 35   // game data lives in the app's own OBB dir, which needs no storage permission at any targetSdk
+        versionCode 2
+        versionName "0.9.0"
+        externalNativeBuild {
+            cmake {
+                arguments "-DANDROID_STL=c++_static", "-DEF_RENDERER=vulkan"
+                // armeabi-v7a ONLY for now: the proven vm_armv7l.c JIT runs the
+                // game VMs at native speed. Do NOT add arm64-v8a until an
+                // aarch64 JIT is ported — 64-bit devices PREFER the arm64 libs
+                // and would silently regress to the slow interpreter VM.
+                // (Play's 64-bit requirement makes the aarch64 JIT a release
+                // prerequisite; see the task list.)
+                abiFilters 'armeabi-v7a'
+            }
+        }
+    }
+    // Release signing: supply the keystore via project properties, e.g. in
+    // ~/.gradle/gradle.properties or -PRELEASE_STORE_FILE=... on the CLI:
+    //   RELEASE_STORE_FILE, RELEASE_STORE_PASSWORD, RELEASE_KEY_ALIAS, RELEASE_KEY_PASSWORD
+    // Without RELEASE_STORE_FILE the release build stays unsigned.
+    if (project.hasProperty('RELEASE_STORE_FILE')) {
+        signingConfigs {
+            release {
+                storeFile file(RELEASE_STORE_FILE)
+                storePassword RELEASE_STORE_PASSWORD
+                keyAlias RELEASE_KEY_ALIAS
+                keyPassword RELEASE_KEY_PASSWORD
+            }
+        }
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            if (project.hasProperty('RELEASE_STORE_FILE')) {
+                signingConfig signingConfigs.release
+            }
+        }
+    }
+    sourceSets.main {
+        jniLibs.srcDir 'libs'
+    }
+    externalNativeBuild {
+        cmake {
+            path 'jni/CMakeLists.txt'
+            version "3.31.5"
+        }
+    }
+    lint {
+        abortOnError false
+    }
+}
+
+dependencies {
+    implementation fileTree(include: ['*.jar'], dir: 'libs')
+}
