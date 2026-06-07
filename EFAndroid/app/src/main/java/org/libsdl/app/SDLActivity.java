@@ -414,7 +414,14 @@ public class SDLActivity extends Activity implements View.OnSystemUiVisibilityCh
 
         setContentView(mLayout);
 
-        setWindowStyle(false);
+        // VoyagerEF: was setWindowStyle(false). The queued "windowed" style
+        // message executed after EFActivity's synchronous immersive setup and
+        // re-showed the system bars, so the first layout measured the surface
+        // at the bar-inset size (1794x1017 on a 1920x1080 panel) — the engine
+        // then locked that into glConfig while the Vulkan surface later grew
+        // to full screen. The game is always fullscreen; queue the immersive
+        // style from the start.
+        setWindowStyle(true);
 
         getWindow().getDecorView().setOnSystemUiVisibilityChangeListener(this);
 

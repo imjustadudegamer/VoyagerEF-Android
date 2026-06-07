@@ -5,6 +5,8 @@ import android.content.DialogInterface;
 import android.content.res.AssetManager;
 import android.os.Bundle;
 import android.util.Log;
+import android.view.View;
+import android.view.WindowManager;
 
 import org.libsdl.app.SDLActivity;
 
@@ -61,6 +63,19 @@ public class EFActivity extends SDLActivity {
         // error dialog containing the message and never starts the engine.
         super.onCreate(savedInstanceState);
 
+        // Go immersive-fullscreen NOW, before the first layout pass.
+        // SDLActivity.onCreate() calls setWindowStyle(false) (system bars
+        // visible) and only switches to immersive later, asynchronously, when
+        // the native engine creates its fullscreen window. By then VKimp_Init
+        // has already read the drawable size, so glConfig gets the bar-inset
+        // size (e.g. 1794x1017) while the Vulkan surface ends up full-screen
+        // (1920x1080) — the frame doesn't fill the screen on the non-FBO path
+        // and is slightly stretched on the FBO path. Applying the flags here
+        // (and marking mFullscreenModeActive so SDLActivity's
+        // onSystemUiVisibilityChange handler keeps re-asserting them) makes
+        // the surface full-size before the engine ever measures it.
+        applyImmersiveMode();
+
         if (mFatalError != null) {
             AlertDialog.Builder b = new AlertDialog.Builder(this);
             b.setTitle("Voyager EF error");
@@ -74,6 +89,22 @@ public class EFActivity extends SDLActivity {
             });
             b.show();
         }
+    }
+
+    /** Same flag set SDLActivity uses for COMMAND_CHANGE_WINDOW_STYLE(1). */
+    private void applyImmersiveMode() {
+        int flags = View.SYSTEM_UI_FLAG_FULLSCREEN |
+                View.SYSTEM_UI_FLAG_HIDE_NAVIGATION |
+                View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY |
+                View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN |
+                View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION |
+                View.SYSTEM_UI_FLAG_LAYOUT_STABLE;
+        getWindow().getDecorView().setSystemUiVisibility(flags);
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
+        getWindow().clearFlags(WindowManager.LayoutParams.FLAG_FORCE_NOT_FULLSCREEN);
+        // SDLActivity re-asserts immersive on visibility changes when this
+        // flag is set, so the bars stay hidden across focus loss/regain.
+        SDLActivity.mFullscreenModeActive = true;
     }
 
     @Override

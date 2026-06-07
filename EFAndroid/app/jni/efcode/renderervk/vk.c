@@ -527,6 +527,24 @@ static void vk_create_swapchain( VkPhysicalDevice physical_device, VkDevice devi
 	// currentExtent is already landscape here; currentTransform=ROTATE_90 would
 	// otherwise rotate our landscape frame into a squished portrait. Keep the
 	// extent as-is and force IDENTITY preTransform (below) so it presents upright.
+
+	// The SDL window can be measured before immersive mode hides the system
+	// bars, so glConfig may hold the bar-inset size (e.g. 1794x1017) while the
+	// surface has already grown to the full screen (1920x1080). Rendering at
+	// glConfig size into a larger swapchain leaves a band of stale swapchain
+	// memory on the non-FBO path. Create the swapchain at the engine's render
+	// size instead — the Android compositor scales the presented buffer to the
+	// window, so the frame always fills the screen. (Safe: SUBOPTIMAL is
+	// already ignored on Android, see vk_end_frame.)
+	if ( glConfig.vidWidth > 0 && glConfig.vidHeight > 0 &&
+			( (uint32_t)glConfig.vidWidth != image_extent.width || (uint32_t)glConfig.vidHeight != image_extent.height ) ) {
+		VkExtent2D render_extent;
+		render_extent.width = MIN( surface_caps.maxImageExtent.width, MAX( surface_caps.minImageExtent.width, (uint32_t)glConfig.vidWidth ) );
+		render_extent.height = MIN( surface_caps.maxImageExtent.height, MAX( surface_caps.minImageExtent.height, (uint32_t)glConfig.vidHeight ) );
+		ri.Printf( PRINT_ALL, "VK swapchain: extent %ux%u -> %ux%u to match render size\n",
+			image_extent.width, image_extent.height, render_extent.width, render_extent.height );
+		image_extent = render_extent;
+	}
 #endif
 
 	vk.clearAttachment = qtrue;
@@ -842,13 +860,22 @@ static void vk_create_render_passes( void )
 	desc.dependencyCount = 2;
 	desc.pDependencies = &deps[0];
 
+	// NOTE: these external dependencies guard transitions between rendering to
+	// the offscreen color image and SAMPLING it (gamma/bloom passes read it
+	// through a sampler, not as an input attachment). Sampled reads can fetch
+	// any texel, so the dependency must be framebuffer-GLOBAL —
+	// VK_DEPENDENCY_BY_REGION_BIT here is a spec violation that Mali happens
+	// to forgive but a binning GPU (Adreno 5xx) does not: tile stores were not
+	// globally visible to the gamma pass's texture fetches, producing
+	// horizontal bands of stale data across the whole frame (seen on
+	// Adreno 530, driver 512.384).
 	deps[0].srcSubpass = VK_SUBPASS_EXTERNAL;
 	deps[0].dstSubpass = 0;
 	deps[0].srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;			// What pipeline stage must have completed for the dependency
 	deps[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;	// What pipeline stage is waiting on the dependency
 	deps[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;						// What access scopes are influence the dependency
 	deps[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT; // What access scopes are waiting on the dependency
-	deps[0].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;					// Only need the current fragment (or tile) synchronized, not the whole framebuffer
+	deps[0].dependencyFlags = 0;											// framebuffer-global: consumer samples arbitrary texels
 
 	deps[1].srcSubpass = 0;
 	deps[1].dstSubpass = VK_SUBPASS_EXTERNAL;
@@ -856,7 +883,7 @@ static void vk_create_render_passes( void )
 	deps[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;			// Don't start shading until data is available
 	deps[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;			// Waiting for color data to be written
 	deps[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;						// Don't read things from the shader before ready
-	deps[1].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;					// Only need the current fragment (or tile) synchronized, not the whole framebuffer
+	deps[1].dependencyFlags = 0;											// framebuffer-global: consumer samples arbitrary texels
 
 	VK_CHECK( qvkCreateRenderPass( device, &desc, NULL, &vk.render_pass.main ) );
 	SET_OBJECT_NAME( vk.render_pass.main, "render pass - main", VK_DEBUG_REPORT_OBJECT_TYPE_RENDER_PASS_EXT );
@@ -4022,6 +4049,24 @@ void vk_initialize( void )
 	// multisampling
 
 	vkMaxSamples = MIN( props.limits.sampledImageColorSampleCounts, props.limits.sampledImageDepthSampleCounts );
+
+#ifdef __ANDROID__
+	// Adreno 5xx proprietary drivers corrupt multisample subpass resolves:
+	// with MSAA on, the resolved color image comes out as horizontal bands of
+	// stale tile data (verified on Adreno 530, driver 512.384, by bisecting
+	// r_fbo/r_ext_multisample/r_bloom on device — FBO and bloom are clean,
+	// MSAA alone reproduces it). The 5xx blob never got a fixed release;
+	// other engines gate the same hardware range (PPSSPP: deviceID
+	// 0x05000000..0x05FFFFFF). Force single-sample there; FBO, bloom and
+	// gamma keep working.
+	if ( props.vendorID == 0x5143 && props.deviceID >= 0x05000000 && props.deviceID < 0x06000000 ) {
+		if ( vk.msaaActive ) {
+			ri.Printf( PRINT_WARNING, "MSAA disabled: Adreno 5xx drivers corrupt multisample resolves\n" );
+			vk.msaaActive = qfalse;
+		}
+		vkMaxSamples = VK_SAMPLE_COUNT_1_BIT;	// also caps the screenmap render target below
+	}
+#endif
 
 	if ( /*vk.fboActive &&*/ vk.msaaActive ) {
 		VkSampleCountFlags mask = vkMaxSamples;

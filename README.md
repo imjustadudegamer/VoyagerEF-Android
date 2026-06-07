@@ -87,6 +87,8 @@ under `baseEF/` are only reliable before a map loads.
 
 ## Known issues / roadmap
 
+- The main menu can only be navigated by touch, or by d-pad up/down on a controller —
+  other controller inputs (sticks, face buttons) don't move the menu selection yet.
 - Pipeline prewarm after map load is not wired up yet, so the first appearance of an
   effect can hitch briefly.
 - Some beam effects (e.g. the arc-welder weapon beam) do not render yet.
