@@ -95,7 +95,10 @@ under `baseEF/` are only reliable before a map loads.
   manually (Video options, or `r_ext_multisample 0` followed by `vid_restart`).
 - Pipeline prewarm after map load is not wired up yet, so the first appearance of an
   effect can hitch briefly.
-- Some beam effects (e.g. the arc-welder weapon beam) do not render yet.
+- Some effects are missing — e.g. beam effects like the arc-welder weapon beam do not
+  render yet.
+- The on-screen touch controls are functional but rough; the layout and feel need a
+  revamp.
 - Ogg/Opus/MP3 decoding and curl downloads are not compiled in yet. This doesn't
   affect the retail game (all stock audio is WAV) — only community content that ships
   compressed audio, and in-game http downloads. The library sources are already in the
