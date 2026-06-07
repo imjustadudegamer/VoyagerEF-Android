@@ -40,6 +40,28 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #define	PROGRAM_STACK_SIZE	0x10000
 #define	PROGRAM_STACK_MASK	(PROGRAM_STACK_SIZE-1)
 
+// max per-proc opStack depth allowed by VM_CheckInstructions, in 4-byte cells
+#define	PROC_OPSTACK_SIZE	30
+
+// opStack cells allocated by aarch64-style backends in VM_CallCompiled
+#define	MAX_OPSTACK_SIZE	512
+
+// reserved space beyond the data segment for effective LOCAL+LOAD* checks,
+// also avoids runtime range checks for many small arguments/structs in syscalls
+#define	VM_DATA_GUARD_SIZE	1024
+
+// guard size must cover at least the function arguments area
+#if VM_DATA_GUARD_SIZE < 256
+#undef VM_DATA_GUARD_SIZE
+#define VM_DATA_GUARD_SIZE 256
+#endif
+
+// flags for the vm_rtChecks cvar
+#define VM_RTCHECK_PSTACK  1
+#define VM_RTCHECK_OPSTACK 2
+#define VM_RTCHECK_JUMP    4
+#define VM_RTCHECK_DATA    8
+
 typedef enum {
 	OP_UNDEF, 
 
@@ -124,9 +146,39 @@ typedef enum {
 	OP_MULF,
 
 	OP_CVIF,
-	OP_CVFI
+	OP_CVFI,
+
+	OP_MAX
 } opcode_t;
 
+
+// structured form of a loaded bytecode instruction, produced by
+// VM_LoadInstructions / VM_CheckInstructions for compiled-code backends
+typedef struct {
+	int32_t	value;     // 32
+	byte	op;        // 8
+	byte	opStack;   // 8
+	unsigned jused:1;  // this instruction is a jump target
+	unsigned swtch:1;  // indirect jump
+	unsigned safe:1;   // non-masked OP_STORE*
+	unsigned endp:1;   // for last OP_LEAVE instruction
+	unsigned fpu:1;    // load into FPU register
+	unsigned njump:1;  // near jump
+} instruction_t;
+
+// opcode_info_t flags
+#define JUMP	(1<<0)
+#define FPU		(1<<1)
+
+typedef struct opcode_info_s
+{
+	int	size;
+	int	stack;
+	int	nargs;
+	int	flags;
+} opcode_info_t;
+
+extern opcode_info_t ops[ OP_MAX ];
 
 
 typedef int	vmptr_t;
@@ -183,11 +235,19 @@ struct vm_s {
 
 	byte		*jumpTableTargets;
 	int			numJumpTableTargets;
+
+	// fields used by the aarch64 (Quake3e-derived) compiled-code backend.
+	// appended at the end so the asm-visible offsets above stay fixed
+	int32_t		*opStack;			// points into VM_CallCompiled's local opStack
+	int32_t		*opStackTop;
+	uint32_t	exactDataLength;	// data+lit+bss before power-of-2 rounding
+	qboolean	forceDataMask;		// mask all data accesses instead of range checks
 };
 
 
 extern	vm_t	*currentVM;
 extern	int		vm_debugLevel;
+extern	cvar_t	*vm_rtChecks;
 
 void VM_Compile( vm_t *vm, vmHeader_t *header );
 int	VM_CallCompiled( vm_t *vm, int *args );
@@ -201,3 +261,11 @@ const char *VM_ValueToSymbol( vm_t *vm, int value );
 void VM_LogSyscalls( int *args );
 
 void VM_BlockCopy(unsigned int dest, unsigned int src, size_t n);
+
+// bytecode pre-pass for compiled-code backends (from Quake3e)
+const char *VM_LoadInstructions( const byte *code_pos, int codeLength, int instructionCount, instruction_t *buf );
+const char *VM_CheckInstructions( instruction_t *buf, int instructionCount,
+								 const int32_t *jumpTableTargets,
+								 int numJumpTableTargets,
+								 int dataLength );
+void VM_ReplaceInstructions( vm_t *vm, instruction_t *buf );

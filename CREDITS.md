@@ -19,7 +19,8 @@ keep these credits intact in any redistribution.
 - **Zack Middleton (zturtleman) & clover.moe** — *lilium-voyager*, the maintained EF fork used as the
   engine base for this port. <https://github.com/clover-moe/lilium-voyager>
 - **Eugene C. & Quake3e contributors** — *Quake3e*, whose Vulkan renderer (`renderervk`) is the
-  renderer of this port. <https://github.com/ec-/Quake3e>
+  renderer of this port, and whose AArch64 QVM compiler (`vm_aarch64.c` + `vm_optimize.h`) is the
+  64-bit JIT of this port. <https://github.com/ec-/Quake3e>
 - **ZTM** — *Flexible Display* (widescreen / aspect handling) in lilium-voyager, used here for the
   device-agnostic screen fill.
 - **faithvoid** — *VoyagerNX* (Nintendo Switch port); identified the ARM64 + EGL/GLES + touch/gyro path
