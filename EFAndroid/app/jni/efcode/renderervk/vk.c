@@ -56,6 +56,7 @@ static PFN_vkCmdBindPipeline							qvkCmdBindPipeline;
 static PFN_vkCmdBindVertexBuffers						qvkCmdBindVertexBuffers;
 static PFN_vkCmdBlitImage								qvkCmdBlitImage;
 static PFN_vkCmdClearAttachments						qvkCmdClearAttachments;
+static PFN_vkCmdClearColorImage							qvkCmdClearColorImage;
 static PFN_vkCmdCopyBuffer								qvkCmdCopyBuffer;
 static PFN_vkCmdCopyBufferToImage						qvkCmdCopyBufferToImage;
 static PFN_vkCmdCopyImage								qvkCmdCopyImage;
@@ -2098,6 +2099,7 @@ static void init_vulkan_library( void )
 	INIT_DEVICE_FUNCTION(vkCmdBindVertexBuffers)
 	INIT_DEVICE_FUNCTION(vkCmdBlitImage)
 	INIT_DEVICE_FUNCTION(vkCmdClearAttachments)
+	INIT_DEVICE_FUNCTION(vkCmdClearColorImage)
 	INIT_DEVICE_FUNCTION(vkCmdCopyBuffer)
 	INIT_DEVICE_FUNCTION(vkCmdCopyBufferToImage)
 	INIT_DEVICE_FUNCTION(vkCmdCopyImage)
@@ -2228,6 +2230,7 @@ static void deinit_device_functions( void )
 	qvkCmdBindVertexBuffers						= NULL;
 	qvkCmdBlitImage								= NULL;
 	qvkCmdClearAttachments						= NULL;
+	qvkCmdClearColorImage						= NULL;
 	qvkCmdCopyBuffer							= NULL;
 	qvkCmdCopyBufferToImage						= NULL;
 	qvkCmdCopyImage								= NULL;
@@ -3410,15 +3413,50 @@ static void vk_alloc_attachments( void )
 		VK_CHECK( qvkCreateImageView( vk.device, &view_desc, NULL, attachments[ i ].image_view ) );
 	}
 
-	// perform layout transition
+	// Perform layout transition. Color attachments that allow transfers are
+	// cleared to black on the way: freshly allocated attachment memory is
+	// undefined, and any read that can ever observe it (sampled edge texels,
+	// partially-covered passes, loadOp LOAD before first full write) turns
+	// into boot-dependent garbage — seen as a white screen on Mali whenever
+	// the allocation landed on dirty memory. One-time cost at creation.
 	command_buffer = begin_command_buffer();
 	for ( i = 0; i < num_attachments; i++ ) {
-		record_image_layout_transition( command_buffer,
-			attachments[i].descriptor,
-			attachments[i].aspect_flags,
-			VK_IMAGE_LAYOUT_UNDEFINED, // old_layout
-			attachments[i].image_layout,
-			0, 0 );
+		if ( ( attachments[i].usage & VK_IMAGE_USAGE_TRANSFER_DST_BIT ) &&
+				( attachments[i].aspect_flags & VK_IMAGE_ASPECT_COLOR_BIT ) && qvkCmdClearColorImage ) {
+			VkClearColorValue clear_color;
+			VkImageSubresourceRange range;
+
+			Com_Memset( &clear_color, 0, sizeof( clear_color ) );
+			clear_color.float32[3] = 1.0f;
+
+			range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+			range.baseMipLevel = 0;
+			range.levelCount = 1;
+			range.baseArrayLayer = 0;
+			range.layerCount = 1;
+
+			record_image_layout_transition( command_buffer,
+				attachments[i].descriptor,
+				attachments[i].aspect_flags,
+				VK_IMAGE_LAYOUT_UNDEFINED,
+				VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+				0, 0 );
+			qvkCmdClearColorImage( command_buffer, attachments[i].descriptor,
+				VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear_color, 1, &range );
+			record_image_layout_transition( command_buffer,
+				attachments[i].descriptor,
+				attachments[i].aspect_flags,
+				VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+				attachments[i].image_layout,
+				0, 0 );
+		} else {
+			record_image_layout_transition( command_buffer,
+				attachments[i].descriptor,
+				attachments[i].aspect_flags,
+				VK_IMAGE_LAYOUT_UNDEFINED, // old_layout
+				attachments[i].image_layout,
+				0, 0 );
+		}
 	}
 	end_command_buffer( command_buffer, __func__ );
 
@@ -3479,6 +3517,8 @@ static void create_color_attachment( uint32_t width, uint32_t height, VkSampleCo
 
 	if ( multisample && !( usage & VK_IMAGE_USAGE_SAMPLED_BIT ) )
 		usage |= VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT;
+	else
+		usage |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;	// for the one-time init clear in vk_alloc_attachments
 
 	// create color image
 	create_desc.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -6567,6 +6607,20 @@ VkPipeline create_pipeline( const Vk_Pipeline_Def *def, renderPass_t renderPassI
 		depth_stencil_state.back = depth_stencil_state.front;
 	}
 
+	// The post-bloom pass is color-only (no depth/stencil attachment, see
+	// vk_create_render_passes): pipelines bound inside it must not enable
+	// depth or stencil operations, or behavior is undefined per the spec.
+	// EF's cgame draws additional 3D scenes after bloom has run (scoreboard
+	// player heads, match-intro overlays) and on Mali the depth-enabled
+	// draws corrupted the entire color attachment with uninitialized-memory
+	// garbage (boot-dependent white screen on foggy-void views). Depth-less
+	// rendering of those small models is visually negligible.
+	if ( renderPassIndex == RENDER_PASS_POST_BLOOM ) {
+		depth_stencil_state.depthTestEnable = VK_FALSE;
+		depth_stencil_state.depthWriteEnable = VK_FALSE;
+		depth_stencil_state.stencilTestEnable = VK_FALSE;
+	}
+
 	depth_stencil_state.minDepthBounds = 0.0f;
 	depth_stencil_state.maxDepthBounds = 1.0f;
 
@@ -7040,6 +7094,11 @@ void vk_clear_depth( qboolean clear_stencil ) {
 	VkClearRect clear_rect[1];
 
 	if ( !vk.active )
+		return;
+
+	// the post-bloom pass is color-only: there is no depth attachment to
+	// clear, and a depth-aspect vkCmdClearAttachments here is invalid
+	if ( vk.renderPassIndex == RENDER_PASS_POST_BLOOM )
 		return;
 
 	if ( vk_world.dirty_depth_attachment == 0 )

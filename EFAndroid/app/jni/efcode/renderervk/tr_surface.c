@@ -1437,8 +1437,18 @@ void RB_Line(vec3_t start, vec3_t end, vec3_t linedirection, vec3_t left,
 	     vec3_t *corners, float starttex, float endtex, refEntity_t *e)
 {
 	int ndx, numind;
+	qboolean twoSided;
 
-	RB_CHECKOVERFLOW( 4, 6 );
+	// Under Vulkan the cull mode is baked into the shader's pipelines at
+	// registration time, so the GL-era trick of flipping shader->cullType
+	// from the backend (see the GL renderer's RB_SurfaceLine) cannot work
+	// here. Beam shaders without a "cull disable" directive (e.g.
+	// gfx/misc/dnbolt, the arc welder) get a front-sided pipeline and these
+	// view-derived quads come out back-facing — emit the reverse winding as
+	// well so exactly one of the two survives culling.
+	twoSided = ( tess.shader->cullType == CT_TWO_SIDED );
+
+	RB_CHECKOVERFLOW( 4, twoSided ? 6 : 12 );
 
 	// Set up the triangles ..
 	ndx = tess.numVertexes;
@@ -1451,6 +1461,16 @@ void RB_Line(vec3_t start, vec3_t end, vec3_t linedirection, vec3_t left,
 	tess.indexes[ numind + 3 ] = ndx + 3;
 	tess.indexes[ numind + 4 ] = ndx + 1;
 	tess.indexes[ numind + 5 ] = ndx + 2;
+
+	if ( !twoSided ) {
+		tess.indexes[ numind + 6 ] = ndx;
+		tess.indexes[ numind + 7 ] = ndx + 3;
+		tess.indexes[ numind + 8 ] = ndx + 1;
+
+		tess.indexes[ numind + 9 ] = ndx + 3;
+		tess.indexes[ numind + 10 ] = ndx + 2;
+		tess.indexes[ numind + 11 ] = ndx + 1;
+	}
 
 	// now create the corner vertices
 
@@ -1498,7 +1518,7 @@ void RB_Line(vec3_t start, vec3_t end, vec3_t linedirection, vec3_t left,
 	tess.vertexColors[ndx].rgba[3] = tess.vertexColors[ndx+1].rgba[3] = tess.vertexColors[ndx+2].rgba[3] = tess.vertexColors[ndx+3].rgba[3] = e->shaderRGBA[3];
 
 	tess.numVertexes += 4;
-	tess.numIndexes += 6;
+	tess.numIndexes += twoSided ? 6 : 12;
 
 
 }
@@ -1520,8 +1540,7 @@ void RB_SurfaceLine( void )
 	refEntity_t *e;
 	vec3_t left;		// I vote the green party...
 	vec3_t start, end, linedirection, start2origin;
-	shader_t *surfshader;
-	
+
 	e = &backEnd.currentEntity->e;
 
 	// Getting up before 1:00 pm to attend HM I lectures finally paid off..
@@ -1536,11 +1555,11 @@ void RB_SurfaceLine( void )
 	VectorSubtract(backEnd.viewParms.or.origin, start, start2origin);
 
 	RB_LineNormal(start2origin, linedirection, e->data.line.width, left);
-	RB_Line(start, end, linedirection, left, NULL, 0, e->data.line.stscale, e); 
+	RB_Line(start, end, linedirection, left, NULL, 0, e->data.line.stscale, e);
 
-	// Hack to make the dreadnought lightning bolt work: set the correct cull type...
-	if((surfshader = R_GetShaderByHandle(e->customShader)))
-		surfshader->cullType = CT_TWO_SIDED;
+	// The GL renderer forces shader->cullType two-sided here ("dreadnought
+	// lightning bolt hack") — useless under Vulkan; RB_Line emits both
+	// windings instead when the pipeline culls.
 }
 
 void RB_SurfaceOrientedLine(void)
@@ -1548,7 +1567,6 @@ void RB_SurfaceOrientedLine(void)
 	refEntity_t *e;
 	vec3_t left;
 	vec3_t linedirection;
-	shader_t *surfshader;
 
 	e = &backEnd.currentEntity->e;
 
@@ -1557,12 +1575,9 @@ void RB_SurfaceOrientedLine(void)
 	VectorCopy(e->axis[1], left);
 	VectorNormalize(left);
 	VectorScale(left, e->data.line.width / 2, left);
-	
+
+	// two-sidedness handled inside RB_Line (see comment there)
 	RB_Line(e->origin, e->oldorigin, linedirection, left, NULL, 0, 1, e);
-
-	surfshader = R_GetShaderByHandle(e->customShader);
-	surfshader->cullType = CT_TWO_SIDED;
-
 }
 
 // This time it's not a rectangle but a trapezoid I guess ...
@@ -1572,9 +1587,14 @@ void RB_SurfaceLine2( void )
 	vec3_t startleft, endleft;		// I still vote the green party...
 	vec3_t start, end, linedirection, start2origin;
 	int ndx, numind;
-	
-	RB_CHECKOVERFLOW( 6, 12 );
-	
+	qboolean twoSided;
+
+	// same reasoning as in RB_Line: emit both windings when the shader's
+	// pipeline backface-culls
+	twoSided = ( tess.shader->cullType == CT_TWO_SIDED );
+
+	RB_CHECKOVERFLOW( 6, twoSided ? 12 : 24 );
+
 	e = &backEnd.currentEntity->e;
 
 	// Set up the triangle ..
@@ -1593,6 +1613,21 @@ void RB_SurfaceLine2( void )
 	tess.indexes[ numind + 9 ] = ndx + 3;
 	tess.indexes[ numind + 10 ] = ndx + 2;
 	tess.indexes[ numind + 11 ] = ndx + 1;
+
+	if ( !twoSided ) {
+		tess.indexes[ numind + 12 ] = ndx;
+		tess.indexes[ numind + 13 ] = ndx + 5;
+		tess.indexes[ numind + 14 ] = ndx + 1;
+		tess.indexes[ numind + 15 ] = ndx + 5;
+		tess.indexes[ numind + 16 ] = ndx + 1;
+		tess.indexes[ numind + 17 ] = ndx + 4;
+		tess.indexes[ numind + 18 ] = ndx + 1;
+		tess.indexes[ numind + 19 ] = ndx + 3;
+		tess.indexes[ numind + 20 ] = ndx + 4;
+		tess.indexes[ numind + 21 ] = ndx + 3;
+		tess.indexes[ numind + 22 ] = ndx + 1;
+		tess.indexes[ numind + 23 ] = ndx + 2;
+	}
 
 
 	// Get the start and end point of the line
@@ -1659,7 +1694,7 @@ void RB_SurfaceLine2( void )
 		tess.vertexColors[ndx+3].rgba[3] = tess.vertexColors[ndx+4].rgba[3] = tess.vertexColors[ndx+5].rgba[3] = e->shaderRGBA[3];
 
 	tess.numVertexes += 6;
-	tess.numIndexes += 12;
+	tess.numIndexes += twoSided ? 12 : 24;
 }
 
 // Draw a cubic bezier curve for the imod weapon.
