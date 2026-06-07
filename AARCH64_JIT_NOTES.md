@@ -4,9 +4,19 @@ STATUS (2026-06-07): implemented and shipping — steps 1-6 of §4 landed (unive
 armv7+arm64 APK, JIT on both ABIs). First light on device: all three QVMs compile
 (ui 423 KB / cgame 445 KB / qagame 600 KB of native code, ~15 ms each) and full bot
 matches run clean with `vm_rtChecks 15` on both a Mali-G78 phone and an Adreno 740
-handheld, 64-bit Vulkan ICDs included. The §4 step-7 hardening soaks (rtChecks-0
-pass, restart cycles, demo-divergence comparison) and step-8 perf measurement are
-still open.
+handheld, 64-bit Vulkan ICDs included.
+
+Hardening (2026-06-07, v0.9.4): scripted soaks (bot match -> map_restart x2 ->
+vid_restart -> map change) pass clean under both codegen modes (vm_rtChecks 15 and
+0/forceDataMask). One finding: with strict checks (15), retail EF gamecode
+occasionally performs a benign out-of-range READ (non-deterministic, bot/event
+dependent) — the interpreter and armv7 JIT have always silently masked these, so
+the default is now **vm_rtChecks 7** (pstack+opstack+jump armed, data masked,
+matching established EF semantics); 15 stays available for VM/JIT debugging.
+Measured (idle-scene bot match, big-core phone): server VM 0.18 -> 0.10 ms/frame
+JIT vs interpreter; total frame renderer-bound either way — the JIT's headroom
+matters in heavy scenes and on small cores. Still open: interpreter-vs-JIT demo
+divergence comparison, mixed-device netplay determinism.
 
 The plan as written before implementation follows: porting Quake3e's `vm_aarch64.c`
 bytecode compiler into this port so arm64-v8a
