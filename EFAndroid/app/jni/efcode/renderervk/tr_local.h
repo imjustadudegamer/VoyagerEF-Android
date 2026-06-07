@@ -70,6 +70,14 @@ char *COM_ParseComplex( const char **data_p, qboolean allowLineBreaks );
 // the implicit-int default silently truncates the returned pointer on 64-bit.
 char *Q_stradd( char *dst, const char *src );
 int Com_Split( char *in, char **out, int outsz, int delim );
+// Q_atof MUST be declared: an implicit int declaration makes callers read the
+// integer return register while the definition returns in a float register,
+// so every numeric shader-parse value (fogParms, waves, tcMods...) comes back
+// as garbage. fogParms garbage rendered black fog as saturated white.
+float Q_atof( const char *str );
+unsigned long Com_GenerateHashValue( const char *fname, const unsigned int size );
+unsigned int crc32_buffer( const byte *buf, unsigned int len );
+int R_RandomOn( double t ); // EF GF_RANDOM (renderercommon/tr_noise.c; tr_common.h not included here)
 // Quake3e cvar-system extensions (groups/validators); lilium lacks them -> stubs
 typedef enum { CV_NONE = 0, CV_FLOAT, CV_INTEGER, CV_FSPATH, CV_MAX } cvarValidator_t;
 typedef enum { CVG_NONE = 0, CVG_RENDERER, CVG_SERVER, CVG_MAX } cvarGroup_t;

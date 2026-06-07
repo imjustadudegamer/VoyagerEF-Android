@@ -111,7 +111,11 @@ target_compile_definitions(main PRIVATE
   USE_LOCAL_HEADERS=1)
 
 target_compile_options(main PRIVATE
-  -fno-strict-aliasing -fvisibility=hidden -Wno-implicit-function-declaration
+  # Implicit declarations are errors: a function implicitly declared as int
+  # whose real return type is float or a pointer makes callers read the wrong
+  # register (an undeclared Q_atof in renderervk corrupted every parsed shader
+  # value this way).
+  -fno-strict-aliasing -fvisibility=hidden -Werror=implicit-function-declaration
   # Always optimize the engine even in debug APKs: the bytecode INTERPRETER
   # (NO_VM_COMPILED runs cgame/qagame every frame), q_math and the renderer
   # backend are murderously slow at -O0, which is the panning-lag bottleneck.
