@@ -1,10 +1,12 @@
-# Voyager EF — Star Trek: Voyager — Elite Force for Android
+# Voyager Elite Force for Android
 
 A native Android port of *Star Trek: Voyager — Elite Force* **Holomatch** (the
-multiplayer game, 2000) built on
-[lilium-voyager](https://github.com/clover-moe/lilium-voyager) with the Vulkan renderer
-from [Quake3e](https://github.com/ec-/Quake3e). Online play and offline matches against
-bots, touch controls, full gamepad support.
+multiplayer game, 2000), inspired by and building on
+[VoyagerNX](https://github.com/faithvoid/VoyagerNX), faithvoid's Nintendo Switch port —
+VoyagerNX proved the ARM + console-controls path this project started from. The engine
+base is [lilium-voyager](https://github.com/clover-moe/lilium-voyager) with the Vulkan
+renderer from [Quake3e](https://github.com/ec-/Quake3e). Online play and offline
+matches against bots, touch controls, full gamepad support.
 
 No game data is included. You need your own copy of the retail game
 (GOG release, original CD + patches, or an existing PC install).
@@ -35,26 +37,23 @@ No game data is included. You need your own copy of the retail game
   64-bit is not enabled by default.** The QVM JIT is 32-bit ARM only, so an arm64
   build would fall back to the much slower bytecode interpreter; a proper arm64 build
   is planned once the aarch64 JIT is ported. Recent devices that dropped 32-bit
-  support entirely (e.g. Pixel 7 and later) cannot run this APK yet. If you want to
-  try the interpreter anyway, add `'arm64-v8a'` to `abiFilters` in
-  `EFAndroid/app/build.gradle` and build from source.
+  support entirely cannot run this APK yet. If you want to try the interpreter
+  anyway, add `'arm64-v8a'` to `abiFilters` in `EFAndroid/app/build.gradle` and
+  build from source.
 - Retail Elite Force data: `pak0.pk3` (541 MB) plus the official patch paks
   `pak1.pk3`–`pak3.pk3` from `BaseEF/` of a PC installation.
 
 ## Install
 
-1. Install the APK (`adb install -r <apk>` or sideload).
-2. Launch. If `pak0.pk3`–`pak3.pk3` aren't found, an import screen opens the system
-   file picker — select all four paks and they are copied into the app's OBB
-   directory. (This is also the only route on Android 11+, where file managers can't
-   write into `Android/obb`.)
-3. Alternatively push the data with adb — note the lowercase `baseEF`:
-   ```
-   adb shell mkdir -p /sdcard/Android/obb/com.voyager.ef/baseEF
-   adb push pak0.pk3 pak1.pk3 pak2.pk3 pak3.pk3 /sdcard/Android/obb/com.voyager.ef/baseEF/
-   ```
-   With a device connected, `./deploy-to-phone.sh` does install + push + launch in one go
-   (set `EF_PAKS` to the directory holding your paks).
+1. Copy your four `pak*.pk3` files onto the phone (anywhere — Downloads is fine).
+2. Install the APK and launch it.
+3. When asked, pick the four pak files. They are copied into the game's data
+   directory and the game starts. That's the whole setup; next launches go straight
+   into the game.
+
+For development there's `./deploy-to-phone.sh`, which installs the APK, pushes the
+paks over adb (point `EF_PAKS` at them) and launches with logcat attached. The manual
+push target is `/sdcard/Android/obb/com.voyager.ef/baseEF/` (lowercase `baseEF`).
 
 ## Build
 
