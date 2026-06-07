@@ -243,8 +243,13 @@ void VM_Init( void ) {
 	Cvar_Get( "vm_game", "2", CVAR_ARCHIVE );	// !@# SHIP WITH SET TO 2
 	Cvar_Get( "vm_ui", "2", CVAR_ARCHIVE );		// !@# SHIP WITH SET TO 2
 
-	// runtime checks emitted by compiled-code backends, see VM_RTCHECK_* flags
-	vm_rtChecks = Cvar_Get( "vm_rtChecks", "15", CVAR_INIT | CVAR_PROTECTED );
+	// Runtime checks emitted by compiled-code backends, see VM_RTCHECK_* flags.
+	// Default 7 = program-stack + op-stack + jump checks; NOT the data check (8):
+	// with it off all data accesses are masked instead (forceDataMask), matching
+	// the interpreter and the armv7 JIT. Retail EF gamecode occasionally performs
+	// benign out-of-range reads (bot/event dependent) that strict checking turns
+	// into a server drop. Set 15 when debugging the VM/JIT itself.
+	vm_rtChecks = Cvar_Get( "vm_rtChecks", "7", CVAR_INIT | CVAR_PROTECTED );
 
 	Cmd_AddCommand ("vmprofile", VM_VmProfile_f );
 	Cmd_AddCommand ("vminfo", VM_VmInfo_f );
