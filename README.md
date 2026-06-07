@@ -31,9 +31,13 @@ No game data is included. You need your own copy of the retail game
 
 - Android 7.0+ (API 24) with Vulkan support — the APK declares Vulkan as a required
   feature. (An OpenGL ES build is possible from source with `-DEF_RENDERER=gl2`.)
-- A device that runs 32-bit ARM binaries (`armeabi-v7a`). An arm64 build is planned
-  once the aarch64 JIT is ported; shipping interpreter-only arm64 libs would be slower
-  than the armv7 JIT.
+- A device that runs 32-bit ARM binaries. **The APK is 32-bit (`armeabi-v7a`) only —
+  64-bit is not enabled by default.** The QVM JIT is 32-bit ARM only, so an arm64
+  build would fall back to the much slower bytecode interpreter; a proper arm64 build
+  is planned once the aarch64 JIT is ported. Recent devices that dropped 32-bit
+  support entirely (e.g. Pixel 7 and later) cannot run this APK yet. If you want to
+  try the interpreter anyway, add `'arm64-v8a'` to `abiFilters` in
+  `EFAndroid/app/build.gradle` and build from source.
 - Retail Elite Force data: `pak0.pk3` (541 MB) plus the official patch paks
   `pak1.pk3`–`pak3.pk3` from `BaseEF/` of a PC installation.
 
@@ -87,8 +91,11 @@ under `baseEF/` are only reliable before a map loads.
 - Pipeline prewarm after map load is not wired up yet, so the first appearance of an
   effect can hitch briefly.
 - Some beam effects (e.g. the arc-welder weapon beam) do not render yet.
-- Ogg/Opus/MP3 audio and curl downloads are compiled out for now.
-- arm64 ABI pending the aarch64 JIT.
+- Ogg/Opus/MP3 decoding and curl downloads are not compiled in yet. This doesn't
+  affect the retail game (all stock audio is WAV) — only community content that ships
+  compressed audio, and in-game http downloads. The library sources are already in the
+  tree; they just need to be wired into the Android build.
+- 64-bit (arm64) is not built by default — see Requirements.
 - Render-thread split (keeping input and sim at full rate during backend stalls) is
   planned.
 
