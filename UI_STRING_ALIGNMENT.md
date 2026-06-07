@@ -1,25 +1,35 @@
-# EF ui.qvm string-data alignment — verified
+# ui.qvm string-table compatibility with retail data
+
+The Android UI module is rebuilt from the Elite Force GDK (`Code-DM/ui`) sources, which
+are older than the retail game's final string tables. This note records why the rebuilt
+`ui.qvm` is nevertheless string-compatible with retail `pak2.pk3` — verified by
+structural alignment, not assumption.
 
 ## Parser semantics
-UI_ParseMenuText/UI_ParseButtonText (ui_atoms.c) use `i = 1` base (index 0 = MNT_NONE/MBT_NONE = null).
-So enum value V -> menu_*_text[V] = the V-th quoted token in the .dat (1-based). MBT entries are pairs
-(label, description); the parser reads both per entry.
 
-## Result of difflib structural alignment (GDK Code-DM enums vs retail pak2 ext_data/*.dat)
-- MNT / mp_normaltext.dat: enum values 1..418 align EXACTLY with retail tokens 1..418.
-  Only structural divergence = 18 retail tokens APPENDED at value 419+ (SP/expansion class & param
-  strings: "No Class","Infiltrator","Sniper",...,"V.I.P."). These are beyond MNT_MAX -> UNUSED. 0 mid-stream.
-- MBT / mp_buttontext.dat: enum values 1..255 align EXACTLY with retail tokens 1..255.
-  Only structural divergence = 10 retail tokens APPENDED at value 256+ ("ASSIMILATION","SPECIALTIES",
-  "DISINTEGRATION","ACTION HERO","ELIMINATION","CLASS",...). Beyond MBT_MAX -> UNUSED. 0 mid-stream.
+`UI_ParseMenuText` / `UI_ParseButtonText` (`ui_atoms.c`) fill their tables starting at
+index 1 (index 0 is `MNT_NONE`/`MBT_NONE`). So enum value V maps to the V-th quoted
+token in the `.dat` file, 1-based. `MBT` entries are pairs (label, description); the
+parser reads both per entry.
+
+## Alignment result (GDK enums vs retail pak2 `ext_data/*.dat`)
+
+- `MNT` / `mp_normaltext.dat`: enum values 1–418 align exactly with retail tokens
+  1–418. The only divergence is 18 retail tokens appended at 419+ (SP/expansion class
+  and parameter strings) — beyond `MNT_MAX`, unused. No mid-stream shifts.
+- `MBT` / `mp_buttontext.dat`: enum values 1–255 align exactly with retail tokens
+  1–255. The only divergence is 10 retail tokens appended at 256+ — beyond `MBT_MAX`,
+  unused. No mid-stream shifts.
+
+Many enum *names* differ from the retail *strings* (e.g. `MNT_BABYLEVEL` → "CADET",
+`MNT_DEMOS` → "DEMONSTRATIONS"). These are renames of the same slot, not structural
+shifts; the displayed retail string is the correct one.
 
 ## Conclusion
-NO enum edits and NO custom .dat are needed. A ui.qvm rebuilt from stvoy/Code-DM/ui will show all
-strings correctly using the retail pak2 ext_data .dat. (Many enum NAMES differ from the retail STRINGS
-— e.g. MNT_BABYLEVEL->"CADET", MNT_BOT->"HC", MNT_DEMOS->"DEMONSTRATIONS" — these are EF reskins of the
-same SLOT; the displayed retail string is correct. They are 'replace' ops, not structural shifts.)
 
-## Prior rebuild bug (root cause)
-The earlier rebuild shipped a LOOSE ext_data/mp_normaltext.dat that did NOT match -> misalignment.
-Fix: ship ONLY the rebuilt ui.qvm loose and let pak2 provide the .dat (verified aligned), OR ship the
-exact pak2 .dat. Do not ship a different-version .dat.
+No enum edits and no custom `.dat` files are needed. The rebuilt `ui.qvm` shows all
+strings correctly with the unmodified retail pak2 `.dat` files.
+
+The corollary: never ship a `.dat` from a different source next to the rebuilt qvm. An
+earlier build shipped a loose `mp_normaltext.dat` that did not match retail and every
+menu string shifted. Ship only the qvm and let pak2 provide the string data.

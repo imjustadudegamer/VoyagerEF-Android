@@ -1,14 +1,18 @@
 #!/usr/bin/env bash
-# Build baseEF/vm/ui.qvm from stvoy/Code-DM/ui using the ORIGINAL Raven/id
-# Windows toolchain (lcc.exe + q3asm.exe) via WSL interop (no Linux compiler
-# needed in this distro). Mirrors stvoy/Code-DM/ui/ui.bat + ui.q3asm.
+# Build baseEF/vm/ui.qvm from the Elite Force GDK UI sources using the original
+# Raven/id Windows toolchain (lcc.exe + q3asm.exe) via WSL interop. Mirrors
+# Code-DM/ui/ui.bat + ui.q3asm. Needs the GDK tree (not part of this repo)
+# checked out next to this directory as stvoy/.
 set -e
-ROOT="/mnt/c/VoyagerNX_Android"
+HERE="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(dirname "$HERE")"
 UI="$ROOT/stvoy/Code-DM/ui"
 BIN="$ROOT/stvoy/bin_nt"
+[ -d "$UI" ] || { echo "ERROR: GDK UI sources not found at $UI"; exit 1; }
 # Raven's lcc.exe looks for cpp.exe/rcc.exe via the LCCDIR env var (its compiled-in
 # default is c:\stvoy\Code-DM\lcc\bin). WSLENV forwards the var to Windows processes.
-export LCCDIR='C:\VoyagerNX_Android\stvoy\Code-DM\lcc\bin'
+LCCDIR="$(wslpath -w "$ROOT/stvoy/Code-DM/lcc/bin")"
+export LCCDIR
 export WSLENV="LCCDIR:${WSLENV}"
 
 cd "$UI"

@@ -18,20 +18,22 @@ keep these credits intact in any redistribution.
 - **Thilo Schulz** — *ioEF*, the original ioquake3-based Elite Force engine. <https://github.com/thiloschulz/ioef>
 - **Zack Middleton (zturtleman) & clover.moe** — *lilium-voyager*, the maintained EF fork used as the
   engine base for this port. <https://github.com/clover-moe/lilium-voyager>
+- **Eugene C. & Quake3e contributors** — *Quake3e*, whose Vulkan renderer (`renderervk`) is the
+  renderer of this port. <https://github.com/ec-/Quake3e>
 - **ZTM** — *Flexible Display* (widescreen / aspect handling) in lilium-voyager, used here for the
   device-agnostic screen fill.
 - **faithvoid** — *VoyagerNX* (Nintendo Switch port); identified the ARM64 + EGL/GLES + touch/gyro path
   that informed this port. <https://github.com/faithvoid/VoyagerNX>
 - **Daggolin** — *Tulip Voyager* (the lilium fork VoyagerNX is based on).
-- **Noah Metzger (mo-/cMod)** — *cMod for Elite Force*; the game-data distribution used for testing.
 
 ## Libraries
-- **SDL2** (libsdl.org) — the Android harness (SDLActivity, GLES context, input, audio). zlib license.
+- **SDL2** (libsdl.org) — the Android harness (SDLActivity, window/surface, input, audio). zlib license.
 - zlib, libjpeg, and the other bundled libraries shipped with ioquake3.
 
 ## This Android port
-- Build/integration work (NDK/CMake harness, Android storage + GLES + landscape + gamepad wiring,
-  16 KB alignment, packaging) done in this repo. The EF logo icon is extracted from the game's own
+- Port work done in this repo: NDK/CMake/Gradle harness, renderervk integration with the EF
+  engine, touch controls, gamepad wiring, Android storage + in-app data import, the rebuilt
+  Android UI module, and packaging. The EF logo icon is extracted from the game's own
   `menu/endcredits/ef_logo.tga` and remains © Raven/Paramount — used here for a fan port only.
 
 This is a non-commercial fan port. No game assets are included or redistributed.
