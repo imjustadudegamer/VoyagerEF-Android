@@ -9,18 +9,16 @@ android {
         applicationId "com.voyager.ef"
         minSdkVersion 24
         targetSdkVersion 35   // game data lives in the app's own OBB dir, which needs no storage permission at any targetSdk
-        versionCode 4
-        versionName "0.9.2"
+        versionCode 5
+        versionName "0.9.3"
         externalNativeBuild {
             cmake {
                 arguments "-DANDROID_STL=c++_static", "-DEF_RENDERER=vulkan"
-                // armeabi-v7a ONLY for now: the proven vm_armv7l.c JIT runs the
-                // game VMs at native speed. Do NOT add arm64-v8a until an
-                // aarch64 JIT is ported — 64-bit devices PREFER the arm64 libs
-                // and would silently regress to the slow interpreter VM.
-                // (Play's 64-bit requirement makes the aarch64 JIT a release
-                // prerequisite; see the task list.)
-                abiFilters 'armeabi-v7a'
+                // Both ABIs ship a JIT: vm_armv7l.c (armeabi-v7a, SUSE) and
+                // vm_aarch64.c (arm64-v8a, Quake3e-derived). 64-bit devices
+                // prefer the arm64 libs and now run the game VMs at native
+                // speed; armv7 stays in for 32-bit-only legacy devices.
+                abiFilters 'armeabi-v7a', 'arm64-v8a'
             }
         }
     }

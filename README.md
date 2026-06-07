@@ -16,7 +16,9 @@ No game data is included. You need your own copy of the retail game
 - Vulkan renderer (Quake3e renderervk, adapted to the Elite Force engine) — see
   [VULKAN_RENDERER.md](VULKAN_RENDERER.md). OpenGL ES (renderergl2) remains available
   as a build-time fallback.
-- ARM JIT (`vm_armv7l`) for the game QVMs.
+- JIT recompilers for the game QVMs on both ABIs: `vm_armv7l` (32-bit, SUSE-derived)
+  and `vm_aarch64` (64-bit, Quake3e-derived) — native-speed cgame/qagame/ui
+  everywhere, no interpreter fallback. See [AARCH64_JIT_NOTES.md](AARCH64_JIT_NOTES.md).
 - Touch controls: virtual stick, look area, and an LCARS-styled button overlay that
   auto-hides while a gamepad is in use.
 - Gamepad: SDL GameController mapping, dual-analog defaults, rebindable in the
@@ -33,13 +35,9 @@ No game data is included. You need your own copy of the retail game
 
 - Android 7.0+ (API 24) with Vulkan support — the APK declares Vulkan as a required
   feature. (An OpenGL ES build is possible from source with `-DEF_RENDERER=gl2`.)
-- A device that runs 32-bit ARM binaries. **The APK is 32-bit (`armeabi-v7a`) only —
-  64-bit is not enabled by default.** The QVM JIT is 32-bit ARM only, so an arm64
-  build would fall back to the much slower bytecode interpreter; a proper arm64 build
-  is planned once the aarch64 JIT is ported. Recent devices that dropped 32-bit
-  support entirely cannot run this APK yet. If you want to try the interpreter
-  anyway, add `'arm64-v8a'` to `abiFilters` in `EFAndroid/app/build.gradle` and
-  build from source.
+- An ARM device. The APK is universal (`armeabi-v7a` + `arm64-v8a`); 64-bit devices
+  use the arm64 build with its own QVM JIT, and devices that dropped 32-bit support
+  entirely are supported.
 - Retail Elite Force data: `pak0.pk3` (541 MB) plus the official patch paks
   `pak1.pk3`–`pak3.pk3` from `BaseEF/` of a PC installation.
 
@@ -100,7 +98,7 @@ under `baseEF/` are only reliable before a map loads.
   affect the retail game (all stock audio is WAV) — only community content that ships
   compressed audio, and in-game http downloads. The library sources are already in the
   tree; they just need to be wired into the Android build.
-- 64-bit (arm64) is not built by default — see Requirements.
+
 - Render-thread split (keeping input and sim at full rate during backend stalls) is
   planned.
 

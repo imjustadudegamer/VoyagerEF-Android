@@ -66,6 +66,10 @@ typedef enum {
 } tokenType_t;
 extern tokenType_t com_tokentype;
 char *COM_ParseComplex( const char **data_p, qboolean allowLineBreaks );
+// Quake3e string/parse helpers (ported in vk_compat.c). Declared here because
+// the implicit-int default silently truncates the returned pointer on 64-bit.
+char *Q_stradd( char *dst, const char *src );
+int Com_Split( char *in, char **out, int outsz, int delim );
 // Quake3e cvar-system extensions (groups/validators); lilium lacks them -> stubs
 typedef enum { CV_NONE = 0, CV_FLOAT, CV_INTEGER, CV_FSPATH, CV_MAX } cvarValidator_t;
 typedef enum { CVG_NONE = 0, CVG_RENDERER, CVG_SERVER, CVG_MAX } cvarGroup_t;

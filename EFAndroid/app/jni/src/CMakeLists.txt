@@ -30,10 +30,13 @@ set(QCOMMON_SRC
   ${EF}/qcommon/unzip.c     ${EF}/qcommon/ioapi.c     ${EF}/qcommon/puff.c
   ${EF}/qcommon/vm.c        ${EF}/qcommon/vm_interpreted.c)
 
-# VM execution: armv7 has a proven JIT recompiler (vm_armv7l.c) — native speed,
-# fixes the interpreter-bound stutter. arm64 has no JIT here -> interpreter.
+# VM execution: armv7 has the proven SUSE JIT (vm_armv7l.c); arm64 has the
+# Quake3e-derived JIT (vm_aarch64.c). Anything else -> interpreter.
 if(CMAKE_ANDROID_ARCH_ABI STREQUAL "armeabi-v7a")
   list(APPEND QCOMMON_SRC ${EF}/qcommon/vm_armv7l.c)
+  set(EF_VM_JIT TRUE)
+elseif(CMAKE_ANDROID_ARCH_ABI STREQUAL "arm64-v8a")
+  list(APPEND QCOMMON_SRC ${EF}/qcommon/vm_aarch64.c)
   set(EF_VM_JIT TRUE)
 else()
   set(EF_VM_JIT FALSE)
