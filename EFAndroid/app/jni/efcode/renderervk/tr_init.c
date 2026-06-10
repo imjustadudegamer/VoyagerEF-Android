@@ -1711,7 +1711,7 @@ static void R_Register( void )
 	ri.Cvar_SetDescription( r_shownormals, "Debugging tool: Show wireframe surface normals." );
 	r_clear = ri.Cvar_Get( "r_clear", "0", 0 );
 	ri.Cvar_SetDescription( r_clear, "Forces screen buffer clearing every frame, removing any hall of mirrors effect in void.\n Use \\r_clearColor to set color." );
-	r_offsetFactor = ri.Cvar_Get( "r_offsetFactor", "-2", CVAR_CHEAT | CVAR_LATCH );
+	r_offsetFactor = ri.Cvar_Get( "r_offsetFactor", "-1", CVAR_CHEAT | CVAR_LATCH );
 	ri.Cvar_SetDescription( r_offsetFactor, "Offset factor for shaders with polygonOffset stages." );
 	r_offsetUnits = ri.Cvar_Get( "r_offsetunits", "-1", CVAR_CHEAT | CVAR_LATCH );
 	ri.Cvar_SetDescription( r_offsetUnits, "Offset units for shaders with polygonOffset stages." );
@@ -1757,6 +1757,13 @@ static void R_Register( void )
 	ri.Cvar_SetDescription( r_allowExtensions, "Use all of the OpenGL extensions your card is capable of." );
 	r_ext_compressed_textures = ri.Cvar_Get( "r_ext_compressed_textures", "0", CVAR_ARCHIVE_ND | CVAR_LATCH | CVAR_DEVELOPER );
 	ri.Cvar_SetDescription( r_ext_compressed_textures, "Enables texture compression." );
+	// EF retail configs spell this 'r_ext_compress_textures'; register the alias so an
+	// imported config's value is honored instead of silently ignored.
+	{
+		cvar_t *efCompress = ri.Cvar_Get( "r_ext_compress_textures", r_ext_compressed_textures->string, CVAR_ARCHIVE_ND | CVAR_LATCH | CVAR_DEVELOPER );
+		if ( efCompress->integer )
+			ri.Cvar_Set( "r_ext_compressed_textures", "1" );
+	}
 	r_ext_multitexture = ri.Cvar_Get( "r_ext_multitexture", "1", CVAR_ARCHIVE_ND | CVAR_LATCH | CVAR_DEVELOPER );
 	ri.Cvar_SetDescription( r_ext_multitexture, "Enables hardware multi-texturing (0: off, 1: on)." );
 	r_ext_compiled_vertex_array = ri.Cvar_Get( "r_ext_compiled_vertex_array", "1", CVAR_ARCHIVE_ND | CVAR_LATCH | CVAR_DEVELOPER );
@@ -1902,6 +1909,13 @@ void R_Init( void ) {
 	R_InitNextFrame();
 
 	InitOpenGL();
+
+#ifdef USE_VULKAN
+	// EF's video-options menu gates the anisotropic-filter control on this flag;
+	// it was never set under Vulkan, leaving the control greyed out. Reflect the
+	// device's actual sampler-anisotropy capability.
+	glConfig.textureFilterAnisotropicAvailable = vk.samplerAnisotropy;
+#endif
 
 	R_InitImages();
 

@@ -778,13 +778,11 @@ static void vk_create_render_passes( void )
 	attachments[1].samples = vkSamples;
 	attachments[1].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR; // Need empty depth buffer before use
 	attachments[1].stencilLoadOp = glConfig.stencilBits ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-	if ( r_bloom->integer ) {
-		attachments[1].storeOp = VK_ATTACHMENT_STORE_OP_STORE; // keep it for post-bloom pass
-		attachments[1].stencilStoreOp = glConfig.stencilBits ? VK_ATTACHMENT_STORE_OP_STORE : VK_ATTACHMENT_STORE_OP_DONT_CARE;
-	} else {
-		attachments[1].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-		attachments[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-	}
+	// Never stored: the post-bloom pass is color-only with depth disabled, so
+	// no later pass reads depth. DONT_CARE keeps the attachment tile-local on
+	// mobile GPUs instead of writing the full buffer to memory every frame.
+	attachments[1].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+	attachments[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
 	attachments[1].initialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 	attachments[1].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 
@@ -820,11 +818,11 @@ static void vk_create_render_passes( void )
 #else
 		attachments[2].loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
 #endif
-		if ( r_bloom->integer ) {
-			attachments[2].storeOp = VK_ATTACHMENT_STORE_OP_STORE; // keep it for post-bloom pass
-		} else {
-			attachments[2].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE; // Intermediate storage (not written)
-		}
+		// Never stored: bloom extracts from and composites onto the RESOLVED
+		// color image (att0), so the multisampled data has no consumer after
+		// the resolve. DONT_CARE avoids writing the full 4x-sample buffer to
+		// memory every frame and lets the image stay transient/lazy.
+		attachments[2].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
 		attachments[2].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
 		attachments[2].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
 		attachments[2].initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
@@ -3649,15 +3647,14 @@ static void vk_create_attachments( void )
 		create_depth_attachment( vk.screenMapWidth, vk.screenMapHeight, vk.screenMapSamples, &vk.screenMap.depth_image, &vk.screenMap.depth_image_view, qtrue );
 
 		if ( vk.msaaActive ) {
-			// With bloom on, the main render pass STOREs the multisampled
-			// attachment — storing into TRANSIENT/LAZILY_ALLOCATED memory is
-			// contradictory and produces banded corruption on Adreno (Mali
-			// silently backs the allocation). Same rule the depth attachment
-			// below already follows: an attachment that will be stored must
-			// not be transient.
+			// Transient: the render pass never stores the multisampled
+			// attachment (bloom reads the resolved image instead), so it can
+			// live in TRANSIENT/LAZILY_ALLOCATED memory. (Storing into
+			// transient memory is what produced banded corruption on Adreno;
+			// with the store gone the conflict is gone.)
 			create_color_attachment( glConfig.vidWidth, glConfig.vidHeight, vkSamples, vk.color_format,
 				VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, &vk.msaa_image, &vk.msaa_image_view, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-				r_bloom->integer ? qfalse : qtrue );
+				qtrue );
 		}
 
 		if ( r_ext_supersample->integer ) {
@@ -3671,7 +3668,7 @@ static void vk_create_attachments( void )
 	//vk_alloc_attachments();
 
 	create_depth_attachment( glConfig.vidWidth, glConfig.vidHeight, vkSamples, &vk.depth_image, &vk.depth_image_view,
-		(vk.fboActive && r_bloom->integer) ? qfalse : qtrue );
+		qtrue );
 
 	vk_alloc_attachments();
 
