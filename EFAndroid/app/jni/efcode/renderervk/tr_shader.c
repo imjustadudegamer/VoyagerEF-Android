@@ -4120,7 +4120,9 @@ qhandle_t RE_RegisterShader3D( const char *name ) {
 		return 0;
 	}
 
-	sh = R_FindShader( name, LIGHTMAP_NONE, qtrue );
+	// EF reference renderers register 3D-model UI/HUD shaders un-mipped (mipRawImage=qfalse)
+	// so they aren't picmipped/blurred like world textures.
+	sh = R_FindShader( name, LIGHTMAP_NONE, qfalse );
 
 	if ( sh->defaultShader ) {
 		return 0;

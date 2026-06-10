@@ -1027,10 +1027,17 @@ static md3Tag_t *R_GetAnimTag( mdrHeader_t *mod, int framenum, const char *tagNa
 	mdrFrame_t		*frame;
 	mdrTag_t		*tag;
 
-	if ( framenum >= mod->numFrames ) 
+	if ( framenum >= mod->numFrames )
 	{
 		// it is possible to have a bad frame while changing models, so don't error
 		framenum = mod->numFrames - 1;
+	}
+	else if ( framenum < 0 )
+	{
+		// a negative frame slips past the upper clamp and indexes before the model
+		// data (frame = mod + ofsFrames + framenum*frameSize) -> out-of-bounds read
+		// in the tag lerp. Clamp the low end too.
+		framenum = 0;
 	}
 
 	tag = (mdrTag_t *)((byte *)mod + mod->ofsTags);

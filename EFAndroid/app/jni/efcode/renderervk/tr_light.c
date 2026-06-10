@@ -438,8 +438,15 @@ int R_LightForPoint( vec3_t point, vec3_t ambientLight, vec3_t directedLight, ve
 {
 	trRefEntity_t ent;
 
-	if ( tr.world->lightGridData == NULL )
-	  return qfalse;
+	// tr.world can be NULL when lighting is polled during a frame where the world
+	// isn't loaded yet (map load/transition). Guard it and return safe defaults so
+	// we never deref NULL and the caller doesn't read uninitialised outputs.
+	if ( tr.world == NULL || tr.world->lightGridData == NULL ) {
+		VectorClear( ambientLight );
+		VectorClear( directedLight );
+		VectorSet( lightDir, 0.0f, 0.0f, 1.0f );
+		return qfalse;
+	}
 
 	Com_Memset(&ent, 0, sizeof(ent));
 	VectorCopy( point, ent.e.origin );
