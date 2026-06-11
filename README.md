@@ -14,8 +14,11 @@ No game data is included. You need your own copy of the retail game
 ## Features
 
 - Vulkan renderer (Quake3e renderervk, adapted to the Elite Force engine) — see
-  [VULKAN_RENDERER.md](VULKAN_RENDERER.md). OpenGL ES (renderergl2) remains available
-  as a build-time fallback.
+  [VULKAN_RENDERER.md](VULKAN_RENDERER.md). This is the only renderer; the old
+  OpenGL ES path has been removed.
+- Optional render thread (`r_smp 1`): runs the back-end (Vulkan command recording,
+  submit and present) on a dedicated thread, overlapping it with the next frame's
+  simulation. See [RENDER_THREAD_PLAN.md](RENDER_THREAD_PLAN.md).
 - JIT recompilers for the game QVMs on both ABIs: `vm_armv7l` (32-bit, SUSE-derived)
   and `vm_aarch64` (64-bit, Quake3e-derived) — native-speed cgame/qagame/ui
   everywhere, no interpreter fallback. See [AARCH64_JIT_NOTES.md](AARCH64_JIT_NOTES.md).
@@ -34,7 +37,7 @@ No game data is included. You need your own copy of the retail game
 ## Requirements
 
 - Android 7.0+ (API 24) with Vulkan support — the APK declares Vulkan as a required
-  feature. (An OpenGL ES build is possible from source with `-DEF_RENDERER=gl2`.)
+  feature.
 - An ARM device. The APK is universal (`armeabi-v7a` + `arm64-v8a`); 64-bit devices
   use the arm64 build with its own QVM JIT, and devices that dropped 32-bit support
   entirely are supported.
@@ -68,7 +71,7 @@ First run downloads Gradle 8.9 / AGP 8.7.2.
   [COPYING.txt](COPYING.txt)).
 - `./build-all.sh` is the full pipeline (engine sync → ui.qvm → assets → APK).
 - `./build-native.sh [abi]` is a fast compile check of `libmain.so` without packaging.
-- Renderer selection: `-DEF_RENDERER=vulkan` (default in the Gradle build) or `gl2`.
+- The renderer is Vulkan-only (`renderervk`).
 
 ### ui.qvm
 
@@ -90,18 +93,12 @@ under `baseEF/` are only reliable before a map loads.
 - If you see corrupted graphics (banding/garbage across the screen), try turning MSAA
   off (Video options, or `r_ext_multisample 0` followed by `vid_restart`) and please
   report your device + GPU driver version.
-- Environment-mapped ("chrome") surfaces use the Quake 3 texture-coordinate formula
-  rather than Elite Force's, so reflective trim pans slightly differently than on the
-  desktop game.
 - The on-screen touch controls are functional but rough; the layout and feel need a
   revamp.
 - Ogg/Opus/MP3 decoding and curl downloads are not compiled in yet. This doesn't
   affect the retail game (all stock audio is WAV) — only community content that ships
   compressed audio, and in-game http downloads. The library sources are already in the
   tree; they just need to be wired into the Android build.
-
-- Render-thread split (keeping input and sim at full rate during backend stalls) is
-  planned.
 
 ## Multiplayer
 

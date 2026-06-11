@@ -57,26 +57,17 @@ set(SYS_SRC
 # sys_main.c compiled separately so we can rename main -> SDL_main
 set(SYS_MAIN ${EF}/sys/sys_main.c)
 
-# ---- renderer (statically linked). EF_RENDERER = gl2 (default, proven) | vulkan (Quake3e renderervk
-#      port — kills Mali pipeline-revalidation panning stutter). ----
-if(NOT DEFINED EF_RENDERER)
-  set(EF_RENDERER "gl2")
-endif()
+# ---- renderer (statically linked). Vulkan-only: the Quake3e renderervk port is
+#      the sole renderer (it kills the Mali pipeline-revalidation panning stutter).
+#      The old OpenGL ES (renderergl2) fallback has been removed. ----
 file(GLOB RENDERCOMMON_SRC ${EF}/renderercommon/*.c)
-if(EF_RENDERER STREQUAL "vulkan")
-  file(GLOB RENDERER_SRC ${EF}/renderervk/*.c)
-  # tr_subs.c (standalone-DLL shims) excluded — statically linked
-  list(REMOVE_ITEM RENDERER_SRC ${EF}/renderervk/tr_subs.c)
-  # shader_data.c (prebuilt SPIR-V) is #included by vk.c — must NOT compile separately
-  list(REMOVE_ITEM RENDERER_SRC ${EF}/renderervk/shaders/spirv/shader_data.c)
-  set(GLSL_SRC "")
-  set(EF_USE_VULKAN TRUE)
-else()
-  file(GLOB RENDERER_SRC ${EF}/renderergl2/*.c)
-  list(REMOVE_ITEM RENDERER_SRC ${EF}/renderergl2/tr_subs.c)
-  file(GLOB GLSL_SRC ${EF}/renderergl2/glsl/*.c)
-  set(EF_USE_VULKAN FALSE)
-endif()
+file(GLOB RENDERER_SRC ${EF}/renderervk/*.c)
+# tr_subs.c (standalone-DLL shims) excluded — statically linked
+list(REMOVE_ITEM RENDERER_SRC ${EF}/renderervk/tr_subs.c)
+# shader_data.c (prebuilt SPIR-V) is #included by vk.c — must NOT compile separately
+list(REMOVE_ITEM RENDERER_SRC ${EF}/renderervk/shaders/spirv/shader_data.c)
+set(GLSL_SRC "")
+set(EF_USE_VULKAN TRUE)
 
 # ---- bundled libs ----
 file(GLOB ZLIB_SRC ${EF}/zlib/*.c)
