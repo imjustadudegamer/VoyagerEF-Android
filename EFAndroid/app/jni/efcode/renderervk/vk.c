@@ -8082,7 +8082,13 @@ void vk_end_frame( void )
 			qvkCmdDraw( vk.cmd->command_buffer, 4, 1, 0, 0 );
 		}
 
-		if ( !ri.CL_IsMinimized() )
+		// Use the per-frame latch set at acquire time, NOT a fresh CL_IsMinimized()
+		// poll: com_minimized is flipped from the SDL event-filter/activity thread
+		// and can change mid-frame. Re-polling here could try to render the gamma
+		// pass to a swapchain image we never acquired (stale swapchain_image_index)
+		// or submit a wait on a never-signaled acquire semaphore -> freeze on
+		// app-switch. swapchain_image_acquired reflects the begin_frame decision.
+		if ( vk.cmd->swapchain_image_acquired )
 		{
 			vk_end_render_pass();
 
@@ -8110,7 +8116,11 @@ void vk_end_frame( void )
 	submit_info.pNext = NULL;
 	submit_info.commandBufferCount = 1;
 	submit_info.pCommandBuffers = &vk.cmd->command_buffer;
-	if ( !ri.CL_IsMinimized() ) {
+	// Gate on the per-frame acquire latch (see vk_begin_frame), not a live
+	// CL_IsMinimized() poll: if we acquired an image we must wait on its acquire
+	// semaphore and signal its present semaphore; if we did not, submit with no
+	// semaphores. A mid-frame com_minimized flip must not desync the two.
+	if ( vk.cmd->swapchain_image_acquired ) {
 #ifdef USE_UPLOAD_QUEUE
 		if ( vk.image_uploaded != VK_NULL_HANDLE ) {
 			waits[0] = vk.cmd->image_acquired;
@@ -8174,7 +8184,11 @@ void vk_present_frame( void )
 	VkPresentInfoKHR present_info;
 	VkResult res;
 
-	if ( ri.CL_IsMinimized() || !vk.cmd->swapchain_image_acquired ) {
+	// Present iff we actually acquired a swapchain image this frame. Keying off the
+	// latch (not a live CL_IsMinimized() poll) means a mid-frame background/resume
+	// transition can't make us present an image we never acquired, or skip
+	// presenting one we did (which would leak the acquired image).
+	if ( !vk.cmd->swapchain_image_acquired ) {
 		return;
 	}
 
