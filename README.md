@@ -58,33 +58,55 @@ push target is `/sdcard/Android/obb/com.voyager.ef/baseEF/` (lowercase `baseEF`)
 
 ## Build
 
+Everything needed to build is in this repository (engine, SDL2, zlib, libjpeg,
+the prebuilt SPIR-V, and the port's bundled assets). No game data is required to
+build — only to run.
+
+Prerequisites:
+
+- Android SDK with platform `android-35` and build-tools 35
+- NDK `25.1.8937393`
+- CMake `3.31.5`
+- JDK 21
+
+Point Gradle at your SDK, either with an env var or a `local.properties` file:
+
+```sh
+export ANDROID_HOME=/path/to/Android/sdk        # or:
+echo "sdk.dir=/path/to/Android/sdk" > EFAndroid/local.properties
+```
+
+Then build:
+
 ```sh
 cd EFAndroid
 ./gradlew :app:assembleDebug    # output: app/build/outputs/apk/debug/app-debug.apk
 ```
 
-Needs: Android SDK platform 35, NDK 25.1.8937393, CMake 3.31.5, JDK 21.
-First run downloads Gradle 8.9 / AGP 8.7.2.
+The first run downloads Gradle 8.9 / AGP 8.7.2. The APK is universal
+(`armeabi-v7a` + `arm64-v8a`).
 
 - Engine sources compiled into the APK live in `EFAndroid/app/jni/efcode/`
   (lilium-voyager plus the Android/Vulkan port layer; GPLv2, see
-  [COPYING.txt](COPYING.txt)).
-- `./build-all.sh` is the full pipeline (engine sync → ui.qvm → assets → APK).
+  [COPYING.txt](COPYING.txt)). The renderer is Vulkan-only (`renderervk`).
 - `./build-native.sh [abi]` is a fast compile check of `libmain.so` without packaging.
-- The renderer is Vulkan-only (`renderervk`).
 
 ### ui.qvm
 
-The UI module is rebuilt from the Elite Force GDK sources with the Android additions
-(video menu, name prompt, bind capture). The prebuilt `ui.qvm` ships in
-`EFAndroid/app/src/main/assets/baseEF/vm/` and is what the APK uses; rebuilding it
-(`build-ui-qvm.sh`) requires the GDK `Code-DM` tree and Raven's lcc/q3asm toolchain,
-which are not part of this repo. String-table compatibility with the retail data is
-documented in [UI_STRING_ALIGNMENT.md](UI_STRING_ALIGNMENT.md).
+The repo does **not** bundle a `ui.qvm`: the UI module is derived from Raven's
+Elite Force GDK UI sources, so the engine instead loads the retail `ui.qvm` from
+your own `pak2.pk3` at runtime. The game is fully playable that way.
 
-Port-specific runtime assets (touch overlay art, Android config) ship inside
-`zpak-android.pk3` so they survive the engine's pure-filesystem checks; loose files
-under `baseEF/` are only reliable before a map loads.
+Optionally, a custom `ui.qvm` with the Android additions (single-column video
+menu, first-boot name prompt, bind capture) can be built from the GDK `Code-DM`
+tree with Raven's lcc/q3asm toolchain (`build-ui-qvm.sh`) and dropped into
+`EFAndroid/app/src/main/assets/baseEF/vm/`. String-table compatibility with the
+retail data is documented in [UI_STRING_ALIGNMENT.md](UI_STRING_ALIGNMENT.md).
+
+Port-specific runtime assets (the LCARS touch overlay art, Android default
+config) ship inside `zpak-android.pk3` so they survive the engine's
+pure-filesystem checks; loose files under `baseEF/` are only reliable before a
+map loads.
 
 ## Known issues / roadmap
 
