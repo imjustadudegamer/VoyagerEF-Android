@@ -1,9 +1,10 @@
 # Pipeline prewarm — design
 
-STATUS: parts 1 and 2 implemented and verified on device (444 pipelines /
-270 defs in ~130 ms on a 2023 Adreno, ~370 ms on a 2016 Adreno — behind the
-load screen, zero hitch warnings in play). Part 3 (disk-serialized
-VkPipelineCache) remains optional follow-up work.
+STATUS: all three parts implemented. Parts 1 and 2 verified on device (444
+pipelines / 270 defs in ~130 ms on a 2023 Adreno, ~370 ms on a 2016 Adreno —
+behind the load screen, zero hitch warnings in play). Part 3 (disk-serialized
+VkPipelineCache) implemented in vk.c; pending on-device timing confirmation of
+the second-run speedup.
 
 ## The problem, precisely
 
@@ -86,7 +87,25 @@ Notes:
   (`vk.c:3884`), which currently destroys all handles and relies on lazy
   regen — with the in-memory cache that re-sweep is nearly free.
 
-### 3. Persist the `VkPipelineCache` to disk (optional but cheap)
+### 3. Persist the `VkPipelineCache` to disk (optional but cheap) — DONE
+
+Implemented in vk.c:
+- `vk_load_pipeline_cache()` / `vk_save_pipeline_cache()` plus a self-validating
+  header (magic, version, dataSize, FNV-1a hash, vendorID, deviceID,
+  driverVersion, pipelineCacheUUID).
+- Direct stdio under `fs_homepath` (`vk_pipeline_cache.bin`), temp file +
+  remove/rename for atomic replace — bypasses pure-FS, which can hide loose
+  files from the game VFS.
+- Loaded into `VkPipelineCacheCreateInfo::pInitialData` in `vk_initialize`; any
+  header/hash/create mismatch falls back to an empty cache.
+- Saved at the end of `vk_prewarm_pipelines()` (after the sweep, NOT at app
+  exit — Android kills without warning).
+- `vk.pipelineCache` now also feeds the gamma/bloom/blur post-process pipeline
+  creation (previously `VK_NULL_HANDLE`).
+
+Original design notes below.
+
+
 
 `vk.pipelineCache` exists (`vk.c:4415`) and feeds every world-pipeline
 creation, but is created empty each run and never serialized — and Android
