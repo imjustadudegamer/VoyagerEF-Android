@@ -110,6 +110,7 @@ static PFN_vkGetBufferMemoryRequirements				qvkGetBufferMemoryRequirements;
 static PFN_vkGetDeviceQueue								qvkGetDeviceQueue;
 static PFN_vkGetImageMemoryRequirements					qvkGetImageMemoryRequirements;
 static PFN_vkGetImageSubresourceLayout					qvkGetImageSubresourceLayout;
+static PFN_vkGetPipelineCacheData						qvkGetPipelineCacheData;
 static PFN_vkInvalidateMappedMemoryRanges				qvkInvalidateMappedMemoryRanges;
 static PFN_vkMapMemory									qvkMapMemory;
 static PFN_vkQueueSubmit								qvkQueueSubmit;
@@ -2161,6 +2162,7 @@ static void init_vulkan_library( void )
 	INIT_DEVICE_FUNCTION(vkGetDeviceQueue)
 	INIT_DEVICE_FUNCTION(vkGetImageMemoryRequirements)
 	INIT_DEVICE_FUNCTION(vkGetImageSubresourceLayout)
+	INIT_DEVICE_FUNCTION(vkGetPipelineCacheData)
 	INIT_DEVICE_FUNCTION(vkInvalidateMappedMemoryRanges)
 	INIT_DEVICE_FUNCTION(vkMapMemory)
 	INIT_DEVICE_FUNCTION(vkQueueSubmit)
@@ -2292,6 +2294,7 @@ static void deinit_device_functions( void )
 	qvkGetDeviceQueue							= NULL;
 	qvkGetImageMemoryRequirements				= NULL;
 	qvkGetImageSubresourceLayout				= NULL;
+	qvkGetPipelineCacheData						= NULL;
 	qvkInvalidateMappedMemoryRanges				= NULL;
 	qvkMapMemory								= NULL;
 	qvkQueueSubmit								= NULL;
@@ -4085,6 +4088,201 @@ static void vk_set_render_scale( void )
 }
 
 
+/*
+===================================================================================
+
+Disk-persisted VkPipelineCache
+
+All SPIR-V is precompiled, so the only on-device cost is vkCreateGraphicsPipelines.
+Android has no OS-level Vulkan blob cache (unlike GLES), so a cold run pays the full
+compile cost for every pipeline. We serialize vk.pipelineCache to a renderer-private
+file under fs_homepath after the prewarm sweep; later runs seed the cache and compile
+~40x faster per pipeline.
+
+Direct stdio is used on purpose: the engine's pure-FS rules can hide loose files from
+the game VFS, and this blob is renderer-private (device-specific, not game content).
+
+The blob is wrapped in our own header. Drivers are known to fail their internal UUID
+validation across updates (Adreno/Mali drivers are Play-Store updatable), and a blob
+written by a different GPU must never be fed back in, so we self-validate every field
+and silently fall back to an empty cache on any mismatch.
+===================================================================================
+*/
+
+#define VK_PIPELINE_CACHE_MAGIC		0x564B5043	// 'VKPC'
+#define VK_PIPELINE_CACHE_VERSION	1
+#define VK_PIPELINE_CACHE_FILE		"vk_pipeline_cache.bin"
+
+typedef struct {
+	uint32_t	magic;
+	uint32_t	version;
+	uint32_t	dataSize;					// bytes of VkPipelineCache blob that follow
+	uint32_t	dataHash;					// hash of the blob, integrity check
+	uint32_t	vendorID;
+	uint32_t	deviceID;
+	uint32_t	driverVersion;
+	uint8_t		cacheUUID[VK_UUID_SIZE];
+} vkPipelineCacheHeader_t;
+
+
+static qboolean vk_pipeline_cache_path( char *out, int outSize ) {
+	const char *homepath = ri.Cvar_VariableString( "fs_homepath" );
+	if ( !homepath || !homepath[0] ) {
+		return qfalse;
+	}
+	// renderer-private, device-specific: store at the homepath root, not under fs_game
+	Com_sprintf( out, outSize, "%s/%s", homepath, VK_PIPELINE_CACHE_FILE );
+	return qtrue;
+}
+
+
+// cheap FNV-1a over the blob; just an integrity tripwire, not security
+static uint32_t vk_pipeline_cache_hash( const void *data, size_t size ) {
+	const uint8_t *p = (const uint8_t *)data;
+	uint32_t h = 2166136261u;
+	size_t i;
+	for ( i = 0; i < size; i++ ) {
+		h ^= p[i];
+		h *= 16777619u;
+	}
+	return h;
+}
+
+
+// Returns a malloc'd blob (caller frees with ri.Free) of validated VkPipelineCache
+// data, with *outSize set, or NULL if no usable cache exists for this device.
+static void *vk_load_pipeline_cache( const VkPhysicalDeviceProperties *props, size_t *outSize ) {
+	char path[MAX_OSPATH];
+	FILE *f;
+	vkPipelineCacheHeader_t hdr;
+	void *blob;
+	long fileSize;
+
+	*outSize = 0;
+
+	if ( !vk_pipeline_cache_path( path, sizeof( path ) ) ) {
+		return NULL;
+	}
+
+	f = fopen( path, "rb" );
+	if ( !f ) {
+		return NULL; // first run, expected
+	}
+
+	fseek( f, 0, SEEK_END );
+	fileSize = ftell( f );
+	fseek( f, 0, SEEK_SET );
+
+	if ( fileSize < (long)sizeof( hdr ) || fread( &hdr, sizeof( hdr ), 1, f ) != 1 ) {
+		fclose( f );
+		return NULL;
+	}
+
+	if ( hdr.magic != VK_PIPELINE_CACHE_MAGIC ||
+		 hdr.version != VK_PIPELINE_CACHE_VERSION ||
+		 hdr.dataSize == 0 ||
+		 (long)( sizeof( hdr ) + hdr.dataSize ) != fileSize ||
+		 hdr.vendorID != props->vendorID ||
+		 hdr.deviceID != props->deviceID ||
+		 hdr.driverVersion != props->driverVersion ||
+		 memcmp( hdr.cacheUUID, props->pipelineCacheUUID, VK_UUID_SIZE ) != 0 ) {
+		ri.Printf( PRINT_DEVELOPER, "Vulkan: pipeline cache header mismatch, ignoring\n" );
+		fclose( f );
+		return NULL;
+	}
+
+	blob = ri.Malloc( hdr.dataSize );
+	if ( fread( blob, hdr.dataSize, 1, f ) != 1 ) {
+		ri.Free( blob );
+		fclose( f );
+		return NULL;
+	}
+	fclose( f );
+
+	if ( vk_pipeline_cache_hash( blob, hdr.dataSize ) != hdr.dataHash ) {
+		ri.Printf( PRINT_DEVELOPER, "Vulkan: pipeline cache hash mismatch, ignoring\n" );
+		ri.Free( blob );
+		return NULL;
+	}
+
+	*outSize = hdr.dataSize;
+	return blob;
+}
+
+
+// Serialize the current vk.pipelineCache to disk via temp file + atomic rename.
+// Best-effort: any failure just leaves the previous (or no) file in place.
+void vk_save_pipeline_cache( void ) {
+	char path[MAX_OSPATH];
+	char tmpPath[MAX_OSPATH];
+	VkPhysicalDeviceProperties props;
+	vkPipelineCacheHeader_t hdr;
+	size_t dataSize = 0;
+	void *blob;
+	FILE *f;
+	VkResult res;
+
+	if ( vk.pipelineCache == VK_NULL_HANDLE || qvkGetPipelineCacheData == NULL ) {
+		return;
+	}
+
+	if ( !vk_pipeline_cache_path( path, sizeof( path ) ) ) {
+		return;
+	}
+
+	res = qvkGetPipelineCacheData( vk.device, vk.pipelineCache, &dataSize, NULL );
+	if ( res != VK_SUCCESS || dataSize == 0 ) {
+		return;
+	}
+
+	blob = ri.Malloc( dataSize );
+	res = qvkGetPipelineCacheData( vk.device, vk.pipelineCache, &dataSize, blob );
+	if ( res != VK_SUCCESS || dataSize == 0 ) {
+		ri.Free( blob );
+		return;
+	}
+
+	qvkGetPhysicalDeviceProperties( vk.physical_device, &props );
+
+	Com_Memset( &hdr, 0, sizeof( hdr ) );
+	hdr.magic = VK_PIPELINE_CACHE_MAGIC;
+	hdr.version = VK_PIPELINE_CACHE_VERSION;
+	hdr.dataSize = (uint32_t)dataSize;
+	hdr.dataHash = vk_pipeline_cache_hash( blob, dataSize );
+	hdr.vendorID = props.vendorID;
+	hdr.deviceID = props.deviceID;
+	hdr.driverVersion = props.driverVersion;
+	Com_Memcpy( hdr.cacheUUID, props.pipelineCacheUUID, VK_UUID_SIZE );
+
+	Com_sprintf( tmpPath, sizeof( tmpPath ), "%s.tmp", path );
+	f = fopen( tmpPath, "wb" );
+	if ( !f ) {
+		ri.Free( blob );
+		return;
+	}
+
+	if ( fwrite( &hdr, sizeof( hdr ), 1, f ) != 1 ||
+		 fwrite( blob, dataSize, 1, f ) != 1 ) {
+		fclose( f );
+		remove( tmpPath );
+		ri.Free( blob );
+		return;
+	}
+
+	fclose( f );
+	ri.Free( blob );
+
+	// atomic replace; rename() does not overwrite on Windows, so drop the old one first
+	remove( path );
+	if ( rename( tmpPath, path ) != 0 ) {
+		remove( tmpPath );
+		return;
+	}
+
+	ri.Printf( PRINT_DEVELOPER, "Vulkan: saved pipeline cache (%u bytes)\n", hdr.dataSize );
+}
+
+
 void vk_initialize( void )
 {
 	char buf[64], driver_version[64];
@@ -4502,9 +4700,26 @@ void vk_initialize( void )
 
 	{
 		VkPipelineCacheCreateInfo ci;
+		size_t blobSize = 0;
+		void *blob = vk_load_pipeline_cache( &props, &blobSize );
+
 		Com_Memset( &ci, 0, sizeof( ci ) );
 		ci.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO;
-		VK_CHECK( qvkCreatePipelineCache( vk.device, &ci, NULL, &vk.pipelineCache ) );
+		ci.initialDataSize = blobSize;
+		ci.pInitialData = blob;
+
+		if ( qvkCreatePipelineCache( vk.device, &ci, NULL, &vk.pipelineCache ) != VK_SUCCESS ) {
+			// a rejected blob can fail creation outright; retry with an empty cache
+			ci.initialDataSize = 0;
+			ci.pInitialData = NULL;
+			VK_CHECK( qvkCreatePipelineCache( vk.device, &ci, NULL, &vk.pipelineCache ) );
+		} else if ( blob ) {
+			ri.Printf( PRINT_DEVELOPER, "Vulkan: seeded pipeline cache from disk (%u bytes)\n", (uint32_t)blobSize );
+		}
+
+		if ( blob ) {
+			ri.Free( blob );
+		}
 	}
 
 	vk.renderPassIndex = RENDER_PASS_MAIN; // default render pass
@@ -5587,7 +5802,7 @@ void vk_create_post_process_pipeline( int program_index, uint32_t width, uint32_
 	create_info.basePipelineHandle = VK_NULL_HANDLE;
 	create_info.basePipelineIndex = -1;
 
-	VK_CHECK( qvkCreateGraphicsPipelines( vk.device, VK_NULL_HANDLE, 1, &create_info, NULL, pipeline ) );
+	VK_CHECK( qvkCreateGraphicsPipelines( vk.device, vk.pipelineCache, 1, &create_info, NULL, pipeline ) );
 
 	SET_OBJECT_NAME( *pipeline, pipeline_name, VK_DEBUG_REPORT_OBJECT_TYPE_PIPELINE_EXT );
 }
@@ -5756,7 +5971,7 @@ void vk_create_blur_pipeline( uint32_t index, uint32_t width, uint32_t height, q
 	create_info.basePipelineHandle = VK_NULL_HANDLE;
 	create_info.basePipelineIndex = -1;
 
-	VK_CHECK( qvkCreateGraphicsPipelines( vk.device, VK_NULL_HANDLE, 1, &create_info, NULL, pipeline ) );
+	VK_CHECK( qvkCreateGraphicsPipelines( vk.device, vk.pipelineCache, 1, &create_info, NULL, pipeline ) );
 
 	SET_OBJECT_NAME( *pipeline, va( "%s blur pipeline %i", horizontal_pass ? "horizontal" : "vertical", index/2 + 1 ), VK_DEBUG_REPORT_OBJECT_TYPE_PIPELINE_EXT );
 }
@@ -6860,6 +7075,10 @@ void vk_prewarm_pipelines( void )
 		ri.Printf( PRINT_ALL, "Prewarmed %u pipelines (%u defs) in %i msec\n",
 			count, vk.pipelines_count, ri.Milliseconds() - start_ms );
 	}
+
+	// Persist the now-warm cache so the next cold run skips the compile cost.
+	// Done here (NOT at app exit) because Android kills processes without warning.
+	vk_save_pipeline_cache();
 }
 
 

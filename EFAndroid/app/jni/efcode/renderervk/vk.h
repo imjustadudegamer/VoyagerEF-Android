@@ -264,6 +264,7 @@ void vk_destroy_samplers( void );
 uint32_t vk_find_pipeline_ext( uint32_t base, const Vk_Pipeline_Def *def, qboolean use );
 void vk_get_pipeline_def( uint32_t pipeline, Vk_Pipeline_Def *def );
 void vk_prewarm_pipelines( void );
+void vk_save_pipeline_cache( void );
 
 void vk_create_post_process_pipeline( int program_index, uint32_t width, uint32_t height );
 void vk_create_pipelines( void );
