@@ -57,6 +57,8 @@ cvar_t	*r_stereoSeparation;
 
 cvar_t	*r_skipBackEnd;
 
+cvar_t	*r_smp;
+
 //cvar_t	*r_anaglyphMode;
 
 cvar_t	*r_greyscale;
@@ -1687,6 +1689,9 @@ static void R_Register( void )
 	r_skipBackEnd = ri.Cvar_Get ("r_skipBackEnd", "0", CVAR_CHEAT);
 	ri.Cvar_SetDescription( r_skipBackEnd, "Skips loading rendering backend." );
 
+	r_smp = ri.Cvar_Get( "r_smp", "0", CVAR_ARCHIVE_ND | CVAR_LATCH );
+	ri.Cvar_SetDescription( r_smp, "Run the rendering back-end (Vulkan command recording, submit and present) on a dedicated render thread, overlapping it with the next frame's simulation. Latched; requires vid_restart." );
+
 	r_lodscale = ri.Cvar_Get( "r_lodscale", "5", CVAR_CHEAT );
 	ri.Cvar_SetDescription( r_lodscale, "Set scale for level of detail adjustment." );
 	r_norefresh = ri.Cvar_Get ("r_norefresh", "0", CVAR_CHEAT);
@@ -1838,6 +1843,93 @@ static void R_Register( void )
 
 /*
 ===============
+RB_RenderThread
+
+Render-thread entry point (r_smp). Loops fetching finished command lists from
+the front end and executing the back end. Returns when GLimp_RendererSleep
+returns NULL (shutdown).
+===============
+*/
+void RB_RenderThread( void ) {
+	const void *data;
+
+	data = ri.GLimp_RendererSleep();
+
+	while ( data != NULL ) {
+		RB_ExecuteRenderCommands( data );
+		data = ri.GLimp_RendererSleep();
+	}
+}
+
+
+/*
+===============
+R_InitCommandBuffers
+
+Spawns the render thread when r_smp is set and a second back-end buffer exists.
+Sets glConfig.smpActive on success. Called at the end of R_Init.
+===============
+*/
+void R_InitCommandBuffers( void ) {
+	glConfig.smpActive = qfalse;
+
+	if ( !r_smp->integer )
+		return;
+
+	if ( backEndDataBuf[1] == NULL ) {
+		// second buffer wasn't allocated (r_smp was 0 at alloc time); needs vid_restart
+		ri.Printf( PRINT_WARNING, "r_smp: second command buffer not allocated; run vid_restart\n" );
+		return;
+	}
+
+	if ( ri.GLimp_SpawnRenderThread == NULL || !ri.GLimp_SpawnRenderThread( RB_RenderThread ) ) {
+		ri.Printf( PRINT_WARNING, "r_smp: failed to spawn render thread; running single-threaded\n" );
+		return;
+	}
+
+	glConfig.smpActive = qtrue;
+	ri.Printf( PRINT_ALL, "Render thread enabled (r_smp)\n" );
+}
+
+
+/*
+===============
+R_ShutdownCommandBuffers
+
+Joins the render thread (if any) so no Vulkan work is in flight before teardown.
+===============
+*/
+void R_ShutdownCommandBuffers( void ) {
+	if ( glConfig.smpActive ) {
+		if ( ri.GLimp_ShutdownRenderThread )
+			ri.GLimp_ShutdownRenderThread();
+		glConfig.smpActive = qfalse;
+	}
+}
+
+
+/*
+===============
+R_SyncRenderThread
+
+Blocks until the render thread is idle. The front end MUST call this before any
+operation that touches Vulkan resources directly (texture/pipeline creation,
+world VBO build, cinematic upload, swapchain/resource teardown), because in SMP
+mode the render thread is otherwise the only thread allowed to call Vulkan.
+No-op when not running multithreaded.
+===============
+*/
+void R_SyncRenderThread( void ) {
+	if ( !glConfig.smpActive )
+		return;
+
+	if ( ri.GLimp_FrontEndSleep )
+		ri.GLimp_FrontEndSleep();
+}
+
+
+/*
+===============
 R_Init
 ===============
 */
@@ -1901,10 +1993,25 @@ void R_Init( void ) {
 	max_polys = r_maxpolys->integer;
 	max_polyverts = r_maxpolyverts->integer;
 
-	ptr = ri.Hunk_Alloc( sizeof( *backEndData ) + sizeof(srfPoly_t) * max_polys + sizeof(polyVert_t) * max_polyverts, h_low);
-	backEndData = (backEndData_t *) ptr;
-	backEndData->polys = (srfPoly_t *) ((char *) ptr + sizeof( *backEndData ));
-	backEndData->polyVerts = (polyVert_t *) ((char *) ptr + sizeof( *backEndData ) + sizeof(srfPoly_t) * max_polys);
+	{
+		// Allocate one back-end data buffer, or two when r_smp is active so the
+		// render thread can consume frame N while the front-end fills frame N+1.
+		int numBuffers = r_smp->integer ? 2 : 1;
+		int b;
+
+		backEndDataBuf[0] = NULL;
+		backEndDataBuf[1] = NULL;
+
+		for ( b = 0; b < numBuffers; b++ ) {
+			ptr = ri.Hunk_Alloc( sizeof( *backEndData ) + sizeof(srfPoly_t) * max_polys + sizeof(polyVert_t) * max_polyverts, h_low );
+			backEndDataBuf[b] = (backEndData_t *) ptr;
+			backEndDataBuf[b]->polys = (srfPoly_t *) ((char *) ptr + sizeof( *backEndData ));
+			backEndDataBuf[b]->polyVerts = (polyVert_t *) ((char *) ptr + sizeof( *backEndData ) + sizeof(srfPoly_t) * max_polys);
+		}
+
+		tr.smpFrame = 0;
+		backEndData = backEndDataBuf[0];
+	}
 
 	R_InitNextFrame();
 
@@ -1939,6 +2046,10 @@ void R_Init( void ) {
 		ri.Printf( PRINT_WARNING, "glGetError() = 0x%x\n", err );
 #endif
 
+	// spawn the render thread last, after all init-time Vulkan resource creation
+	// (images, pipelines, fonts) has run on this thread.
+	R_InitCommandBuffers();
+
 	ri.Printf( PRINT_ALL, "----- finished R_Init -----\n" );
 }
 
@@ -1957,6 +2068,9 @@ static void RE_Shutdown( refShutdownCode_t code ) {
 	//}
 #endif
 	ri.Printf( PRINT_ALL, "RE_Shutdown( %i )\n", code );
+
+	// stop the render thread before tearing anything down
+	R_ShutdownCommandBuffers();
 
 	ri.Cmd_RemoveCommand( "modellist" );
 	ri.Cmd_RemoveCommand( "screenshotBMP" );
@@ -2030,6 +2144,7 @@ Touch all images to make sure they are resident
 */
 static void RE_EndRegistration( void ) {
 #ifdef USE_VULKAN
+	R_SyncRenderThread();	// the prewarm sweep below creates pipelines on this thread
 	vk_wait_idle();
 	// command buffer is not in recording state at this stage
 	// so we can't issue RB_ShowImages() there

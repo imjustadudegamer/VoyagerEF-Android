@@ -3411,6 +3411,13 @@ void *VK_GetInstanceProcAddr( VkInstance instance, const char *name );
 qboolean VK_CreateSurface( VkInstance instance, VkSurfaceKHR *surface );
 #endif
 
+// SMP / render-thread support (r_smp), implemented in sdl/sdl_glimp.c
+qboolean GLimp_SpawnRenderThread( void (*function)( void ) );
+void *GLimp_RendererSleep( void );
+void GLimp_FrontEndSleep( void );
+void GLimp_WakeRenderer( void *data );
+void GLimp_ShutdownRenderThread( void );
+
 void CL_InitRef( void ) {
 	refimport_t	ri;
 	refexport_t	*ret;
@@ -3527,6 +3534,13 @@ void CL_InitRef( void ) {
 	ri.VK_GetInstanceProcAddr = VK_GetInstanceProcAddr;
 	ri.VK_CreateSurface = VK_CreateSurface;
 #endif
+
+	// SMP / render-thread support (r_smp)
+	ri.GLimp_SpawnRenderThread = GLimp_SpawnRenderThread;
+	ri.GLimp_RendererSleep = GLimp_RendererSleep;
+	ri.GLimp_FrontEndSleep = GLimp_FrontEndSleep;
+	ri.GLimp_WakeRenderer = GLimp_WakeRenderer;
+	ri.GLimp_ShutdownRenderThread = GLimp_ShutdownRenderThread;
 
 	ret = GetRefAPI( REF_API_VERSION, &ri );
 #ifdef USE_FLEXIBLE_DISPLAY

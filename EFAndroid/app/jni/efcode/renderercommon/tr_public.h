@@ -220,6 +220,14 @@ typedef struct {
 	void *(*VK_GetInstanceProcAddr)( VkInstance instance, const char *name );
 	qboolean (*VK_CreateSurface)( VkInstance instance, VkSurfaceKHR *surface );
 #endif
+
+	// SMP / render-thread support (r_smp). The renderer only calls these when it
+	// successfully spawned a render thread (glConfig.smpActive).
+	qboolean (*GLimp_SpawnRenderThread)( void (*function)( void ) );
+	void *(*GLimp_RendererSleep)( void );
+	void (*GLimp_FrontEndSleep)( void );
+	void (*GLimp_WakeRenderer)( void *data );
+	void (*GLimp_ShutdownRenderThread)( void );
 } refimport_t;
 
 
