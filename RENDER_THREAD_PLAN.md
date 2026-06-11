@@ -1,8 +1,8 @@
 # Render thread (SMP) — design & implementation
 
-STATUS: implemented behind `r_smp` (default **0** = off). The proven
-single-threaded path is byte-for-byte unchanged when `r_smp 0`. This is
-RENDERER_BACKLOG.md optimization #2.
+STATUS: implemented behind `r_smp` (default **1** = on, after on-device
+validation on Adreno 740 and Mali-G78). Set `r_smp 0` for the single-threaded
+path, which is byte-for-byte unchanged. This is RENDERER_BACKLOG.md optimization #2.
 
 ## Goal
 

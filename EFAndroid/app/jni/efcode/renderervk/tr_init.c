@@ -1689,8 +1689,8 @@ static void R_Register( void )
 	r_skipBackEnd = ri.Cvar_Get ("r_skipBackEnd", "0", CVAR_CHEAT);
 	ri.Cvar_SetDescription( r_skipBackEnd, "Skips loading rendering backend." );
 
-	r_smp = ri.Cvar_Get( "r_smp", "0", CVAR_ARCHIVE_ND | CVAR_LATCH );
-	ri.Cvar_SetDescription( r_smp, "Run the rendering back-end (Vulkan command recording, submit and present) on a dedicated render thread, overlapping it with the next frame's simulation. Latched; requires vid_restart." );
+	r_smp = ri.Cvar_Get( "r_smp", "1", CVAR_ARCHIVE_ND | CVAR_LATCH );
+	ri.Cvar_SetDescription( r_smp, "Run the rendering back-end (Vulkan command recording, submit and present) on a dedicated render thread, overlapping it with the next frame's simulation. On by default; set to 0 to run single-threaded. Latched; requires vid_restart." );
 
 	r_lodscale = ri.Cvar_Get( "r_lodscale", "5", CVAR_CHEAT );
 	ri.Cvar_SetDescription( r_lodscale, "Set scale for level of detail adjustment." );

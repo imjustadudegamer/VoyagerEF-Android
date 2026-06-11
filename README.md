@@ -16,9 +16,10 @@ No game data is included. You need your own copy of the retail game
 - Vulkan renderer (Quake3e renderervk, adapted to the Elite Force engine) — see
   [VULKAN_RENDERER.md](VULKAN_RENDERER.md). This is the only renderer; the old
   OpenGL ES path has been removed.
-- Optional render thread (`r_smp 1`): runs the back-end (Vulkan command recording,
-  submit and present) on a dedicated thread, overlapping it with the next frame's
-  simulation. See [RENDER_THREAD_PLAN.md](RENDER_THREAD_PLAN.md).
+- Render thread (`r_smp`, on by default): runs the back-end (Vulkan command
+  recording, submit and present) on a dedicated thread, overlapping it with the
+  next frame's simulation. Set `r_smp 0` to run single-threaded. See
+  [RENDER_THREAD_PLAN.md](RENDER_THREAD_PLAN.md).
 - JIT recompilers for the game QVMs on both ABIs: `vm_armv7l` (32-bit, SUSE-derived)
   and `vm_aarch64` (64-bit, Quake3e-derived) — native-speed cgame/qagame/ui
   everywhere, no interpreter fallback. See [AARCH64_JIT_NOTES.md](AARCH64_JIT_NOTES.md).
