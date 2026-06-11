@@ -107,11 +107,13 @@ void main() {
 
 #ifdef USE_ENV
 	vec3 viewer = normalize(eyePos.xyz - in_position);
-	float d = dot(in_normal, viewer); 
-	vec2 reflected = in_normal.yz * 2 * d - viewer.yz;
+	float d = dot(in_normal, viewer);
+	// Elite Force uses the X/Y reflected components with no 0.5 bias
+	// (this renderer is built EF-only; the SPIR-V is compiled without -DELITEFORCE).
+	vec2 reflected = in_normal.xy * 2 * d - viewer.xy;
 
-	frag_tex_coord0.s = 0.5 + reflected.x * 0.5;
-	frag_tex_coord0.t = 0.5 - reflected.y * 0.5;
+	frag_tex_coord0.s = reflected.x * 0.5;
+	frag_tex_coord0.t = reflected.y * 0.5;
 #else
 	frag_tex_coord0 = in_tex_coord0;
 #endif
