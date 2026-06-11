@@ -2378,6 +2378,10 @@ void RE_LoadWorldMap( const char *name ) {
 		ri.Error( ERR_DROP, "ERROR: attempted to redundantly load world map" );
 	}
 
+	// loading the world creates GPU images (lightmaps) and the static world VBO;
+	// in SMP mode the render thread must be idle while we touch Vulkan directly.
+	R_SyncRenderThread();
+
 	// set default sun direction to be used if it isn't
 	// overridden by a shader
 	tr.sunDirection[0] = 0.45f;

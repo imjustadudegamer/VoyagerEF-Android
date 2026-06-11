@@ -1055,12 +1055,21 @@ void RB_CalcEnvironmentTexCoords( float *st )
 
 		d = DotProduct (normal, viewer);
 
+#ifdef ELITEFORCE
+		// Elite Force uses the X/Y reflected components with no 0.5 bias
+		reflected[0] = normal[0]*2*d - viewer[0];
+		reflected[1] = normal[1]*2*d - viewer[1];
+
+		st[0] = reflected[0] * 0.5;
+		st[1] = reflected[1] * 0.5;
+#else
 		//reflected[0] = normal[0]*2*d - viewer[0];
 		reflected[1] = normal[1]*2*d - viewer[1];
 		reflected[2] = normal[2]*2*d - viewer[2];
 
 		st[0] = 0.5 + reflected[1] * 0.5;
 		st[1] = 0.5 - reflected[2] * 0.5;
+#endif
 	}
 }
 

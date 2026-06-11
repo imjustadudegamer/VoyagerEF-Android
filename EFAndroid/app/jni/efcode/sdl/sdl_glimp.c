@@ -1343,3 +1343,143 @@ qboolean VK_CreateSurface( VkInstance instance, VkSurfaceKHR *surface )
 	return SDL_Vulkan_CreateSurface( SDL_window, instance, surface ) == SDL_TRUE ? qtrue : qfalse;
 }
 #endif // USE_VULKAN
+
+/*
+===========================================================================
+SMP / render-thread support (r_smp)
+
+ioq3-canonical layout, ported to SDL2 mutex/cond. The main (front-end) thread
+hands a finished command list to the render thread via GLimp_WakeRenderer and
+can wait for the render thread to go idle via GLimp_FrontEndSleep (used by the
+renderer's R_SyncRenderThread before any front-end Vulkan resource op). The
+render thread loops in the renderer-supplied function, calling GLimp_RendererSleep
+to fetch the next list.
+===========================================================================
+*/
+// State machine on a single pointer, guarded by glimp_smpMutex:
+//   glimp_smpData == NULL  -> render thread is idle/parked (finished previous list)
+//   glimp_smpData != NULL  -> a command list is handed off / being executed
+// glimp_smpShutdown breaks the render loop. This gives one-frame overlap: the main
+// thread's front-end of frame N+1 runs while the render thread executes frame N's
+// back-end; GLimp_WakeRenderer rendezvouses them (blocks until the prior list was
+// consumed) so a 2-deep backEndData buffer is never overwritten while in use.
+static void (*glimp_renderThreadFunction)( void );
+static SDL_Thread *glimp_renderThread = NULL;
+static SDL_mutex  *glimp_smpMutex = NULL;
+static SDL_cond   *glimp_renderCommandsEvent = NULL;   // main -> render: work ready
+static SDL_cond   *glimp_renderCompletedEvent = NULL;  // render -> main: went idle
+static void * volatile glimp_smpData = NULL;
+static volatile qboolean glimp_smpShutdown = qfalse;
+
+void GLimp_FrontEndSleep( void );
+void GLimp_WakeRenderer( void *data );
+
+static int GLimp_RenderThreadWrapper( void *arg )
+{
+	(void)arg;
+	glimp_renderThreadFunction();
+	return 0;
+}
+
+qboolean GLimp_SpawnRenderThread( void (*function)( void ) )
+{
+	glimp_smpShutdown = qfalse;
+	// Pretend a list is in flight so the startup GLimp_FrontEndSleep below blocks
+	// until the new thread reaches its first RendererSleep (which clears it). This
+	// guarantees the thread is parked before the first WakeRenderer.
+	glimp_smpData = (void *)1;
+
+	if ( glimp_smpMutex == NULL )
+		glimp_smpMutex = SDL_CreateMutex();
+	if ( glimp_renderCommandsEvent == NULL )
+		glimp_renderCommandsEvent = SDL_CreateCond();
+	if ( glimp_renderCompletedEvent == NULL )
+		glimp_renderCompletedEvent = SDL_CreateCond();
+
+	if ( !glimp_smpMutex || !glimp_renderCommandsEvent || !glimp_renderCompletedEvent ) {
+		glimp_smpData = NULL;
+		return qfalse;
+	}
+
+	glimp_renderThreadFunction = function;
+
+	glimp_renderThread = SDL_CreateThread( GLimp_RenderThreadWrapper, "render", NULL );
+	if ( !glimp_renderThread ) {
+		ri.Printf( PRINT_WARNING, "SDL_CreateThread() returned %s\n", SDL_GetError() );
+		glimp_smpData = NULL;
+		return qfalse;
+	}
+
+	// block until the thread's first RendererSleep clears glimp_smpData
+	GLimp_FrontEndSleep();
+
+	return qtrue;
+}
+
+// Render thread: mark the previous list finished, then block for the next one.
+// Returns NULL only on shutdown (tells the renderer's wrapper loop to exit).
+void *GLimp_RendererSleep( void )
+{
+	void *data;
+
+	SDL_LockMutex( glimp_smpMutex );
+	{
+		glimp_smpData = NULL;                              // idle
+		SDL_CondSignal( glimp_renderCompletedEvent );      // release any FrontEndSleep/WakeRenderer
+
+		while ( glimp_smpData == NULL && !glimp_smpShutdown )
+			SDL_CondWait( glimp_renderCommandsEvent, glimp_smpMutex );
+
+		data = glimp_smpShutdown ? NULL : glimp_smpData;
+	}
+	SDL_UnlockMutex( glimp_smpMutex );
+
+	return data;
+}
+
+// Main thread: block until the render thread is parked (no work in flight).
+void GLimp_FrontEndSleep( void )
+{
+	SDL_LockMutex( glimp_smpMutex );
+	{
+		while ( glimp_smpData != NULL )
+			SDL_CondWait( glimp_renderCompletedEvent, glimp_smpMutex );
+	}
+	SDL_UnlockMutex( glimp_smpMutex );
+}
+
+// Main thread: wait until the render thread consumed the previous list, then hand
+// off the next one. data must be non-NULL.
+void GLimp_WakeRenderer( void *data )
+{
+	SDL_LockMutex( glimp_smpMutex );
+	{
+		while ( glimp_smpData != NULL )
+			SDL_CondWait( glimp_renderCompletedEvent, glimp_smpMutex );
+		glimp_smpData = data;
+		SDL_CondSignal( glimp_renderCommandsEvent );
+	}
+	SDL_UnlockMutex( glimp_smpMutex );
+}
+
+void GLimp_ShutdownRenderThread( void )
+{
+	if ( glimp_renderThread ) {
+		GLimp_FrontEndSleep();           // park
+		SDL_LockMutex( glimp_smpMutex );
+		{
+			glimp_smpShutdown = qtrue;
+			SDL_CondSignal( glimp_renderCommandsEvent );
+		}
+		SDL_UnlockMutex( glimp_smpMutex );
+		SDL_WaitThread( glimp_renderThread, NULL );
+		glimp_renderThread = NULL;
+	}
+
+	if ( glimp_renderCommandsEvent ) { SDL_DestroyCond( glimp_renderCommandsEvent ); glimp_renderCommandsEvent = NULL; }
+	if ( glimp_renderCompletedEvent ) { SDL_DestroyCond( glimp_renderCompletedEvent ); glimp_renderCompletedEvent = NULL; }
+	if ( glimp_smpMutex ) { SDL_DestroyMutex( glimp_smpMutex ); glimp_smpMutex = NULL; }
+
+	glimp_smpData = NULL;
+	glimp_smpShutdown = qfalse;
+}

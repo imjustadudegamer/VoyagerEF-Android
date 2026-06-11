@@ -13,7 +13,7 @@ android {
         versionName "0.9.6"
         externalNativeBuild {
             cmake {
-                arguments "-DANDROID_STL=c++_static", "-DEF_RENDERER=vulkan"
+                arguments "-DANDROID_STL=c++_static"
                 // Both ABIs ship a JIT: vm_armv7l.c (armeabi-v7a, SUSE) and
                 // vm_aarch64.c (arm64-v8a, Quake3e-derived). 64-bit devices
                 // prefer the arm64 libs and now run the game VMs at native

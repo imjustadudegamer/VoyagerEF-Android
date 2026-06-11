@@ -82,6 +82,41 @@ static void R_IssueRenderCommands( void ) {
 	// add an end-of-list command
 	*(int *)(cmdList->cmds + cmdList->used) = RC_END_OF_LIST;
 
+	if ( glConfig.smpActive ) {
+		// ---- multithreaded back end (r_smp) ----
+		if ( backEnd.screenshotMask == 0 ) {
+			if ( ri.CL_IsMinimized() || backEnd.throttle || r_skipBackEnd->integer ) {
+				// skip the back end; reuse this same buffer next frame (no flip)
+				cmdList->used = 0;
+				return;
+			}
+			// hand the finished list to the render thread (blocks until it has
+			// consumed the previous one), then switch the front end to the other
+			// buffer. The new front-end buffer is reset by R_InitNextFrame().
+			ri.GLimp_WakeRenderer( cmdList->cmds );
+			tr.smpFrame ^= 1;
+			backEndData = backEndDataBuf[tr.smpFrame];
+			return;
+		} else {
+#ifdef USE_VULKAN
+			if ( ri.CL_IsMinimized() && !RE_CanMinimize() ) {
+				backEnd.screenshotMask = 0;
+				cmdList->used = 0;
+				return;
+			}
+#endif
+			// Screenshot / video capture writes files from the back end via the
+			// engine's FS; run it synchronously on this thread with the render
+			// thread parked rather than off-thread. No buffer flip.
+			R_SyncRenderThread();
+			cmdList->used = 0;
+			if ( !r_skipBackEnd->integer )
+				RB_ExecuteRenderCommands( cmdList->cmds );
+			return;
+		}
+	}
+
+	// ---- single-threaded back end ----
 	// clear it out, in case this is a sync and not a buffer flip
 	cmdList->used = 0;
 
@@ -493,5 +528,11 @@ void RE_VertexLighting( qboolean allowed )
 
 // Public wrapper so lilium's shared renderercommon/tr_font.c can flush commands.
 void R_IssuePendingRenderCommands( void ) {
+	if ( glConfig.smpActive ) {
+		// don't hand off a partial frame; just make sure the render thread is
+		// idle so a following GPU-resource op (e.g. font atlas upload) is safe.
+		R_SyncRenderThread();
+		return;
+	}
 	R_IssueRenderCommands();
 }

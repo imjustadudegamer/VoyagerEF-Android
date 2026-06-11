@@ -1346,6 +1346,8 @@ typedef struct {
 #endif
 
 	qboolean				vertexLightingAllowed;
+
+	int						smpFrame;	// front-end backEndData buffer index (0/1) when r_smp active
 } trGlobals_t;
 
 
@@ -1465,6 +1467,8 @@ extern	cvar_t	*r_portalOnly;
 extern	cvar_t	*r_subdivisions;
 extern	cvar_t	*r_lodCurveError;
 extern	cvar_t	*r_skipBackEnd;
+
+extern	cvar_t	*r_smp;			// run the back-end on a dedicated render thread
 
 extern	cvar_t	*r_greyscale;
 extern	cvar_t	*r_dither;
@@ -2038,7 +2042,14 @@ typedef struct {
 extern	int		max_polys;
 extern	int		max_polyverts;
 
-extern	backEndData_t	*backEndData;
+extern	backEndData_t	*backEndData;			// current front-end buffer (== backEndDataBuf[tr.smpFrame])
+extern	backEndData_t	*backEndDataBuf[2];		// [1] allocated only when r_smp active
+
+// SMP / render-thread (r_smp)
+void RB_RenderThread( void );
+void R_InitCommandBuffers( void );
+void R_ShutdownCommandBuffers( void );
+void R_SyncRenderThread( void );
 
 void RB_ExecuteRenderCommands( const void *data );
 void RB_TakeScreenshot( int x, int y, int width, int height, const char *fileName );

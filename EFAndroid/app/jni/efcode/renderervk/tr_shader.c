@@ -3107,6 +3107,13 @@ static shader_t *FinishShader( void ) {
 	depthMask = qfalse;
 	fogCollapse = qfalse;
 
+#ifdef USE_VULKAN
+	// FinishShader creates Vulkan pipelines (and mutates vk.pipelines[]); in SMP
+	// mode the render thread must be idle so it isn't lazily creating pipelines
+	// concurrently. No-op when single-threaded (and during init, before spawn).
+	R_SyncRenderThread();
+#endif
+
 	//
 	// set sky stuff appropriate
 	//

@@ -21,7 +21,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 */
 #include "tr_local.h"
 
-backEndData_t	*backEndData;
+backEndData_t	*backEndData;			// current front-end buffer (== backEndDataBuf[tr.smpFrame])
+backEndData_t	*backEndDataBuf[2];		// [1] allocated only when r_smp is active
 backEndState_t	backEnd;
 
 #ifndef USE_VULKAN
@@ -1079,6 +1080,10 @@ void RE_StretchRaw( int x, int y, int w, int h, int cols, int rows, byte *data, 
 	if ( !tr.registered ) {
 		return;
 	}
+
+	// RE_UploadCinematic uploads to a scratch image on vk.queue directly; in SMP
+	// mode the render thread must be idle so the upload doesn't race it.
+	R_SyncRenderThread();
 
 	start = 0;
 	if ( r_speeds->integer ) {
