@@ -478,6 +478,7 @@ void S_Init( void )
 
 	s_volume = Cvar_Get( "s_volume", "0.8", CVAR_ARCHIVE );
 	s_musicVolume = Cvar_Get( "s_musicvolume", "0.25", CVAR_ARCHIVE );
+	Cvar_Get( "s_volumeVoice", "1", CVAR_ARCHIVE ); // EF Sound-menu Voice slider (retail registers this; backported from SP)
 	s_muted = Cvar_Get("s_muted", "0", CVAR_ROM);
 	s_doppler = Cvar_Get( "s_doppler", "1", CVAR_ARCHIVE );
 	s_backend = Cvar_Get( "s_backend", "", CVAR_ROM );
@@ -496,6 +497,7 @@ void S_Init( void )
 		Cmd_AddCommand( "stopmusic", S_StopMusic_f );
 		Cmd_AddCommand( "s_list", S_SoundList );
 		Cmd_AddCommand( "s_stop", S_StopAllSounds );
+		Cmd_AddCommand( "stopsound", S_StopAllSounds ); // retail-registered alias; closing-credits menu issues it (backported from SP)
 		Cmd_AddCommand( "s_info", S_SoundInfo );
 
 		cv = Cvar_Get( "s_useOpenAL", "0", CVAR_ARCHIVE | CVAR_LATCH );
@@ -543,6 +545,7 @@ void S_Shutdown( void )
 	Cmd_RemoveCommand( "stopmusic");
 	Cmd_RemoveCommand( "s_list" );
 	Cmd_RemoveCommand( "s_stop" );
+	Cmd_RemoveCommand( "stopsound" );
 	Cmd_RemoveCommand( "s_info" );
 
 	S_CodecShutdown( );
